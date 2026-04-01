@@ -1,167 +1,124 @@
-use hidapi::{HidApi, HidDevice};
-use std::io::{self, Write};
+use mx4::{Result, features};
 
-const VID: u16 = 0x046d;
-const PID: u16 = 0xc548;
-const PAGE: u16 = 0xff00;
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
+}
 
-const SHORT: u8 = 0x10;
-const LONG: u8 = 0x11;
-const SW_ID: u8 = 0x01;
-
-const HAPTIC: u16 = 0x0b4e;
-const BATTERY: u16 = 0x1000;
-const UNIFIED_BATTERY: u16 = 0x1004;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
 
     match args.next().as_deref() {
         None | Some("-h" | "--help") => {
             println!("Usage:");
-            println!("  mx4 haptic <1-15>");
+            println!("  mx4 status [--json]");
+            println!("  mx4 status battery [--json]");
+            println!("  mx4 status dpi [--json]");
+            println!("  mx4 status haptic [--json]");
+            println!("  mx4 status wheel [--json]");
+            println!("  mx4 status thumb-wheel [--json]");
+            println!("  mx4 status force-button [--json]");
+            println!("  mx4 set strength <0-100|off|subtle|low|medium|high>");
+            println!("  mx4 set host <1|2|3>");
+            println!("  mx4 set dpi <value>");
+            println!("  mx4 set wheel ratchet <free|ratchet>");
+            println!("  mx4 set wheel ratchet-speed <0-50>");
+            println!("  mx4 set wheel force <1-100>");
+            println!("  mx4 set wheel invert <on|off>");
+            println!("  mx4 set wheel resolution <on|off>");
+            println!("  mx4 set wheel divert <on|off>");
+            println!("  mx4 set thumb-wheel invert <on|off>");
+            println!("  mx4 set thumb-wheel divert <on|off>");
+            println!("  mx4 set force-button <value>");
+            println!("  mx4 haptic <0-14|0..14|{{0..14}}>...");
             println!("  mx4 battery [--json]");
         }
-        Some("haptic") => haptic(args.next())?,
-        Some("battery") => battery(args.next().as_deref())?,
-        Some(_) => return Err("I only know `haptic` and `battery` right now".into()),
+        Some("status") => status(args.collect())?,
+        Some("set") => set(args.collect())?,
+        Some("haptic") => haptic(args.collect())?,
+        Some("battery") => features::battery::status(args.next().as_deref())?,
+        Some(_) => {
+            return Err("I only know `status`, `set`, `haptic`, and `battery` right now".into());
+        }
     }
 
     Ok(())
 }
 
-fn haptic(arg: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let effect = match arg {
-        Some(arg) => arg.parse()?,
-        None => prompt()?,
-    };
-
-    if !(1..=15).contains(&effect) {
-        return Err("pick a haptic effect from 1 to 15".into());
-    }
-
-    let (dev, idx) = open()?;
-    let f = HAPTIC.to_be_bytes();
-    let pkt = [SHORT, idx, f[0], f[1], effect - 1, 0, 0];
-
-    if dev.write(&pkt)? != pkt.len() {
-        return Err("that haptic packet didn't fully send".into());
-    }
-
-    Ok(())
-}
-
-fn battery(arg: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let json = match arg {
-        None => false,
-        Some("--json") => true,
-        Some(_) => return Err("try `mx4 battery --json` if you want JSON".into()),
-    };
-
-    let (dev, idx) = open()?;
-    let (feature, unified) = match feature(&dev, idx, UNIFIED_BATTERY) {
-        Ok(feature) => (feature, true),
-        Err(_) => (feature(&dev, idx, BATTERY)?, false),
-    };
-    let reply = req(&dev, idx, feature, if unified { 1 } else { 0 }, &[])?;
-    let pct = *reply.get(4).ok_or("the battery reply was too short")?;
-    let charging = if unified {
-        matches!(reply.get(7).copied(), Some(1..=3))
-    } else {
-        matches!(reply.get(6).copied(), Some(1..=4))
-    };
-
-    if json {
-        println!(r#"{{"battery":{},"charging":{}}}"#, pct, charging);
-    } else {
-        println!(
-            "Battery: {}%{}",
-            pct,
-            if charging { " (charging)" } else { "" }
-        );
-    }
-
-    Ok(())
-}
-
-fn open() -> Result<(HidDevice, u8), Box<dyn std::error::Error>> {
-    let api = HidApi::new()?;
-    let info = api
-        .device_list()
-        .find(|d| d.vendor_id() == VID && d.product_id() == PID && d.usage_page() == PAGE)
-        .ok_or("couldn't find your MX receiver")?;
-
-    Ok((info.open_device(&api)?, u8::try_from(info.interface_number())?))
-}
-
-fn feature(
-    dev: &HidDevice,
-    idx: u8,
-    feature_id: u16,
-) -> Result<u8, Box<dyn std::error::Error>> {
-    let reply = req(dev, idx, 0x00, 0x00, &feature_id.to_be_bytes())?;
-    let feature = *reply.get(4).ok_or("the feature lookup reply was too short")?;
-
-    if feature == 0 {
-        return Err("that feature isn't available on this device".into());
-    }
-
-    Ok(feature)
-}
-
-fn req(
-    dev: &HidDevice,
-    idx: u8,
-    feature: u8,
-    function: u8,
-    params: &[u8],
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut drain = [0u8; 64];
-    while dev.read_timeout(&mut drain, 0)? != 0 {}
-
-    let mut pkt = [0u8; 7];
-    pkt[0] = SHORT;
-    pkt[1] = idx;
-    pkt[2] = feature;
-    pkt[3] = (function << 4) | SW_ID;
-    pkt[4..4 + params.len().min(3)].copy_from_slice(&params[..params.len().min(3)]);
-
-    if dev.write(&pkt)? != pkt.len() {
-        return Err("that request didn't fully send".into());
-    }
-
-    let mut reply = [0u8; 20];
-
-    for _ in 0..100 {
-        let len = dev.read_timeout(&mut reply, 10)?;
-        if len < 7 {
-            continue;
+fn status(args: Vec<String>) -> Result<()> {
+    match args.as_slice() {
+        [] => {
+            features::battery::print_best_effort();
+            features::dpi::status(None)?;
+            features::wheel::status(None)?;
+            features::wheel::thumb_status(None)?;
+            features::force_button::status(None)?;
+            features::haptic::status(None)?;
+            Ok(())
         }
+        [flag] if flag == "--json" => {
+            println!("{}", json_status());
+            Ok(())
+        }
+        [target] if target == "battery" => features::battery::status(None),
+        [target] if target == "dpi" => features::dpi::status(None),
+        [target] if target == "haptic" => features::haptic::status(None),
+        [target] if target == "wheel" => features::wheel::status(None),
+        [target] if target == "thumb-wheel" => features::wheel::thumb_status(None),
+        [target] if target == "force-button" => features::force_button::status(None),
+        [target, flag] if target == "battery" => features::battery::status(Some(flag.as_str())),
+        [target, flag] if target == "dpi" => features::dpi::status(Some(flag.as_str())),
+        [target, flag] if target == "haptic" => features::haptic::status(Some(flag.as_str())),
+        [target, flag] if target == "wheel" => features::wheel::status(Some(flag.as_str())),
+        [target, flag] if target == "thumb-wheel" => features::wheel::thumb_status(Some(flag.as_str())),
+        [target, flag] if target == "force-button" => features::force_button::status(Some(flag.as_str())),
+        _ => Err(
+            "try `mx4 status`, `mx4 status --json`, `mx4 status battery --json`, `mx4 status dpi --json`, `mx4 status wheel --json`, `mx4 status thumb-wheel --json`, `mx4 status force-button --json`, or `mx4 status haptic --json`".into(),
+        ),
+    }
+}
 
-        if (reply[0] == SHORT || reply[0] == LONG)
-            && reply[1] == idx
-            && reply[2] == feature
-            && reply[3] >> 4 == function
-            && reply[3] & 0x0f == SW_ID
-        {
-            return Ok(reply[..len].to_vec());
+fn json_status() -> String {
+    format!(
+        r#"{{"battery":{},"dpi":{},"wheel":{},"thumb_wheel":{},"force_button":{},"haptic":{}}}"#,
+        best_effort_json(features::battery::json_status()),
+        best_effort_json(features::dpi::json_status()),
+        best_effort_json(features::wheel::json_status()),
+        best_effort_json(features::wheel::json_thumb_status()),
+        best_effort_json(features::force_button::json_status()),
+        best_effort_json(features::haptic::json_status()),
+    )
+}
+
+fn best_effort_json(result: Result<String>) -> String {
+    result.unwrap_or_else(|_| "null".to_string())
+}
+
+fn set(args: Vec<String>) -> Result<()> {
+    match args.as_slice() {
+        [target, value] if target == "strength" => features::haptic::set_strength_arg(value),
+        [target, value] if target == "host" => features::host::set(value),
+        [target, value] if target == "dpi" => features::dpi::set(value),
+        [target, setting, value] if target == "wheel" => features::wheel::set(setting, value),
+        [target, setting, value] if target == "thumb-wheel" => {
+            features::wheel::set_thumb(setting, value)
+        }
+        [target, value] if target == "force-button" => features::force_button::set(value),
+        _ => Err(
+            "try `mx4 set strength 100`, `mx4 set host 2`, `mx4 set dpi 2500`, `mx4 set wheel ratchet free`, `mx4 set wheel ratchet-speed 10`, or `mx4 set thumb-wheel invert on`"
+                .into(),
+        ),
+    }
+}
+
+fn haptic(args: Vec<String>) -> Result<()> {
+    if let [mode, _value] = args.as_slice() {
+        if mode == "strength" {
+            return Err("use `mx4 set strength ...` instead of `mx4 haptic strength ...`".into());
         }
     }
 
-    Err("the device didn't answer in time".into())
-}
-
-fn prompt() -> Result<u8, Box<dyn std::error::Error>> {
-    loop {
-        print!("Enter a number from 1 to 15: ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        match input.trim().parse() {
-            Ok(n @ 1..=15) => return Ok(n),
-            _ => println!("Pick a haptic effect from 1 to 15."),
-        }
-    }
+    features::haptic::play(&args)
 }
