@@ -1,7 +1,12 @@
 [package]
 name = "mx4"
 version = "0.2.0"
+description = "Tiny CLI and Rust library for MX Master 4 status and settings"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/EriksRemess/mx4"
+homepage = "https://github.com/EriksRemess/mx4"
+readme = "README.md"
 
 [dependencies]
 hidapi = "2.6.5"
