@@ -1,3 +1,6 @@
+pub mod autostart;
+pub mod config;
+pub mod daemon;
 pub mod device;
 pub mod features;
 
