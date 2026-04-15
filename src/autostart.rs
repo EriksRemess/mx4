@@ -40,19 +40,16 @@ fn ensure_macos_launch_agent() -> Result<()> {
     let agent_path = agent_dir.join(format!("{LAUNCH_AGENT_LABEL}.plist"));
     let executable = env::current_exe()?;
     let plist = macos_plist(&executable);
-    let changed = write_if_changed(&agent_path, &plist)?;
+    let _changed = write_if_changed(&agent_path, &plist)?;
+    let uid = current_uid()?;
+    let domain = format!("gui/{uid}");
+    let path = agent_path.to_string_lossy().into_owned();
+    let service = format!("{domain}/{LAUNCH_AGENT_LABEL}");
 
-    if changed {
-        let _ = run(
-            "launchctl",
-            ["unload", agent_path.to_string_lossy().as_ref()],
-        );
-    }
-
-    run(
-        "launchctl",
-        ["load", "-w", agent_path.to_string_lossy().as_ref()],
-    )?;
+    let _ = run_dynamic("launchctl", &["bootout", &domain, &path]);
+    run_dynamic("launchctl", &["bootstrap", &domain, &path])?;
+    let _ = run_dynamic("launchctl", &["enable", &service]);
+    let _ = run_dynamic("launchctl", &["kickstart", "-k", &service]);
     Ok(())
 }
 
@@ -129,6 +126,33 @@ fn run<const N: usize>(program: &str, args: [&str; N]) -> Result<()> {
     } else {
         Err(format!("{program} exited with status {status}").into())
     }
+}
+
+fn run_dynamic(program: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(program).args(args).status()?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with status {status}").into())
+    }
+}
+
+fn current_uid() -> Result<String> {
+    let output = Command::new("id").arg("-u").output()?;
+
+    if !output.status.success() {
+        return Err(format!("id -u exited with status {}", output.status).into());
+    }
+
+    let uid = String::from_utf8(output.stdout)?;
+    let uid = uid.trim();
+
+    if uid.is_empty() {
+        return Err("id -u returned an empty uid".into());
+    }
+
+    Ok(uid.to_string())
 }
 
 fn systemd_quote(path: &Path) -> String {
