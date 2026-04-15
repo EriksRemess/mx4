@@ -1,6 +1,6 @@
 [package]
 name = "mx4"
-version = "0.3.2"
+version = "0.3.3"
 description = "Tiny CLI and Rust library for MX Master 4 status and settings"
 edition = "2024"
 license = "MIT"
