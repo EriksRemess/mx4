@@ -27,10 +27,11 @@ fn ensure_linux_service() -> Result<()> {
     let unit = linux_unit(&executable);
     let changed = write_if_changed(&service_path, &unit)?;
 
-    if changed {
-        run("systemctl", ["--user", "daemon-reload"])?;
+    if !changed {
+        return Ok(());
     }
 
+    run("systemctl", ["--user", "daemon-reload"])?;
     run("systemctl", ["--user", "enable", "--now", SERVICE_NAME])?;
     Ok(())
 }
@@ -40,7 +41,12 @@ fn ensure_macos_launch_agent() -> Result<()> {
     let agent_path = agent_dir.join(format!("{LAUNCH_AGENT_LABEL}.plist"));
     let executable = env::current_exe()?;
     let plist = macos_plist(&executable);
-    let _changed = write_if_changed(&agent_path, &plist)?;
+    let changed = write_if_changed(&agent_path, &plist)?;
+
+    if !changed {
+        return Ok(());
+    }
+
     let uid = current_uid()?;
     let domain = format!("gui/{uid}");
     let path = agent_path.to_string_lossy().into_owned();
