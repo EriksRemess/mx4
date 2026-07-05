@@ -1,10 +1,13 @@
-use hidapi::{HidApi, HidDevice};
+use hidapi::{BusType, DeviceInfo, HidApi, HidDevice};
 
 use crate::Result;
 
 const VID: u16 = 0x046d;
-const PID: u16 = 0xc548;
-const PAGE: u16 = 0xff00;
+const BOLT_RECEIVER_PID: u16 = 0xc548;
+const MX_MASTER_4_BT_PID: u16 = 0xb042;
+const BOLT_HIDPP_PAGE: u16 = 0xff00;
+const BT_HIDPP_PAGE: u16 = 0xff43;
+const BT_DIRECT_INDEX: u8 = 0x00;
 
 pub const SHORT: u8 = 0x10;
 const LONG: u8 = 0x11;
@@ -14,15 +17,12 @@ const HIDPP20_ERROR: u8 = 0xff;
 
 pub fn open() -> Result<(HidDevice, u8)> {
     let api = HidApi::new()?;
-    let info = api
-        .device_list()
-        .find(|d| d.vendor_id() == VID && d.product_id() == PID && d.usage_page() == PAGE)
-        .ok_or("couldn't find your MX receiver")?;
+    let info = find_supported_device(&api).ok_or(
+        "couldn't find an MX Master 4 HID++ device over Bluetooth or a Logi Bolt receiver",
+    )?;
+    let idx = device_index(info)?;
 
-    Ok((
-        info.open_device(&api)?,
-        u8::try_from(info.interface_number())?,
-    ))
+    Ok((info.open_device(&api)?, idx))
 }
 
 pub fn feature(dev: &HidDevice, idx: u8, feature_id: u16) -> Result<u8> {
@@ -79,11 +79,68 @@ pub fn req(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -
 }
 
 pub fn write_packet(dev: &HidDevice, pkt: &[u8], err: &'static str) -> Result<()> {
-    if dev.write(pkt)? != pkt.len() {
+    let pkt = wire_packet(report_id(dev), pkt);
+
+    if dev.write(&pkt)? != pkt.len() {
         return Err(err.into());
     }
 
     Ok(())
+}
+
+fn find_supported_device(api: &HidApi) -> Option<&DeviceInfo> {
+    api.device_list()
+        .find(|d| is_bluetooth_hidpp(d))
+        .or_else(|| api.device_list().find(|d| is_bolt_hidpp(d)))
+}
+
+fn is_bluetooth_hidpp(info: &DeviceInfo) -> bool {
+    is_bluetooth_mx4(info) && info.usage_page() == BT_HIDPP_PAGE
+}
+
+fn is_bluetooth_mx4(info: &DeviceInfo) -> bool {
+    info.vendor_id() == VID
+        && info.product_id() == MX_MASTER_4_BT_PID
+        && matches!(info.bus_type(), BusType::Bluetooth)
+}
+
+fn is_bolt_hidpp(info: &DeviceInfo) -> bool {
+    info.vendor_id() == VID
+        && info.product_id() == BOLT_RECEIVER_PID
+        && info.usage_page() == BOLT_HIDPP_PAGE
+}
+
+fn device_index(info: &DeviceInfo) -> Result<u8> {
+    if is_bluetooth_mx4(info) {
+        return Ok(BT_DIRECT_INDEX);
+    }
+
+    u8::try_from(info.interface_number()).map_err(|_| {
+        format!(
+            "unsupported HID++ interface number {}",
+            info.interface_number()
+        )
+        .into()
+    })
+}
+
+fn report_id(dev: &HidDevice) -> u8 {
+    match dev.get_device_info() {
+        Ok(info) if is_bluetooth_mx4(&info) => LONG,
+        _ => SHORT,
+    }
+}
+
+fn wire_packet(report_id: u8, pkt: &[u8]) -> Vec<u8> {
+    if report_id != LONG {
+        return pkt.to_vec();
+    }
+
+    let mut long = vec![0u8; 20];
+    let len = pkt.len().min(long.len());
+    long[..len].copy_from_slice(&pkt[..len]);
+    long[0] = LONG;
+    long
 }
 
 enum ReplyMatch {
@@ -151,7 +208,7 @@ fn hidpp_error_name(code: u8) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplyMatch, classify_reply};
+    use super::{LONG, ReplyMatch, SHORT, classify_reply, wire_packet};
 
     #[test]
     fn matches_expected_reply() {
@@ -183,5 +240,21 @@ mod tests {
         assert!(message.contains("unexpected reply"));
         assert!(message.contains("feature 0x0c"));
         assert!(message.contains("function 0x03"));
+    }
+
+    #[test]
+    fn keeps_short_packets_for_short_report_devices() {
+        let pkt = [SHORT, 0, 1, 2, 3, 4, 5];
+        assert_eq!(wire_packet(SHORT, &pkt), pkt);
+    }
+
+    #[test]
+    fn expands_short_packets_for_long_report_devices() {
+        let pkt = [SHORT, 0, 1, 2, 3, 4, 5];
+        let wire = wire_packet(LONG, &pkt);
+        assert_eq!(wire.len(), 20);
+        assert_eq!(wire[0], LONG);
+        assert_eq!(&wire[1..7], &pkt[1..7]);
+        assert!(wire[7..].iter().all(|b| *b == 0));
     }
 }

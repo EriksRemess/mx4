@@ -9,7 +9,11 @@ const SERVICE_NAME: &str = "mx4.service";
 const LAUNCH_AGENT_LABEL: &str = "io.github.eriksremess.mx4";
 
 pub fn ensure_installed() -> Result<()> {
-    if env::var_os("MX4_SKIP_AUTOSTART").is_some() {
+    if should_skip_autostart(
+        env::var_os("MX4_SKIP_AUTOSTART"),
+        env::var_os("SUDO_USER"),
+        env::var_os("SUDO_UID"),
+    ) {
         return Ok(());
     }
 
@@ -18,6 +22,14 @@ pub fn ensure_installed() -> Result<()> {
         "macos" => ensure_macos_launch_agent(),
         _ => Ok(()),
     }
+}
+
+fn should_skip_autostart(
+    explicit_skip: Option<std::ffi::OsString>,
+    sudo_user: Option<std::ffi::OsString>,
+    sudo_uid: Option<std::ffi::OsString>,
+) -> bool {
+    explicit_skip.is_some() || sudo_user.is_some() || sudo_uid.is_some()
 }
 
 fn ensure_linux_service() -> Result<()> {
@@ -182,7 +194,7 @@ fn xml_escape(path: &Path) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{linux_unit, macos_plist};
+    use super::{linux_unit, macos_plist, should_skip_autostart};
 
     #[test]
     fn systemd_unit_runs_daemon_mode() {
@@ -197,5 +209,16 @@ mod tests {
         assert!(plist.contains("<string>/tmp/mx4</string>"));
         assert!(plist.contains("<string>daemon</string>"));
         assert!(plist.contains("MX4_SKIP_AUTOSTART"));
+    }
+
+    #[test]
+    fn skips_autostart_under_sudo() {
+        assert!(should_skip_autostart(None, Some("eriks".into()), None));
+        assert!(should_skip_autostart(None, None, Some("1000".into())));
+    }
+
+    #[test]
+    fn skips_autostart_when_explicitly_disabled() {
+        assert!(should_skip_autostart(Some("1".into()), None, None));
     }
 }

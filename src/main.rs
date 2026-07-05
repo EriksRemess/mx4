@@ -10,11 +10,11 @@ fn main() {
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let wants_help = matches!(
+    let wants_help_or_version = matches!(
         args.first().map(String::as_str),
-        None | Some("-h" | "--help")
+        None | Some("-h" | "--help" | "-v" | "--version")
     );
-    if !wants_help {
+    if !wants_help_or_version {
         if let Err(err) = autostart::ensure_installed() {
             eprintln!("Warning: couldn't install background daemon: {err}");
         }
@@ -25,6 +25,7 @@ fn run() -> Result<()> {
     match args.next().as_deref() {
         None | Some("-h" | "--help") => {
             println!("Usage:");
+            println!("  mx4 -v|--version");
             println!("  mx4 status [--json]");
             println!("  mx4 status battery [--json]");
             println!("  mx4 status dpi [--json]");
@@ -48,6 +49,7 @@ fn run() -> Result<()> {
             println!("  mx4 haptic <0-14|0..14|{{0..14}}>...");
             println!("  mx4 battery [--json]");
         }
+        Some("-v" | "--version") => println!("{}", version_output()),
         Some("status") => status(args.collect())?,
         Some("set") => set(args.collect())?,
         Some("daemon") => daemon::run(&args.collect::<Vec<_>>())?,
@@ -61,6 +63,14 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn version_output() -> String {
+    format!(
+        "mx4 {}\nhidapi {}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("MX4_HIDAPI_VERSION").unwrap_or("unknown")
+    )
 }
 
 fn status(args: Vec<String>) -> Result<()> {
@@ -213,5 +223,17 @@ fn parse_ratchet(value: &str) -> Result<config::WheelRatchet> {
         "free" => Ok(config::WheelRatchet::Free),
         "ratchet" => Ok(config::WheelRatchet::Ratchet),
         _ => Err("pick `free` or `ratchet`".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_output;
+
+    #[test]
+    fn version_output_includes_package_and_hidapi_versions() {
+        let output = version_output();
+        assert!(output.contains(env!("CARGO_PKG_VERSION")));
+        assert!(output.contains("hidapi "));
     }
 }

@@ -9,4 +9,4 @@ homepage = "https://github.com/EriksRemess/mx4"
 readme = "README.md"
 
 [dependencies]
-hidapi = "2.6.5"
+hidapi = "2.6.6"

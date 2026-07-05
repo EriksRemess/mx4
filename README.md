@@ -63,6 +63,18 @@ Haptic strength presets:
 - `medium` = `60`
 - `high` = `100`
 
+## Linux permissions
+
+If `mx4 status` reports a `/dev/hidraw... Permission denied` error, install the udev rule once and reconnect the mouse or Logi Bolt receiver:
+
+```bash
+sudo install -Dm644 contrib/udev/99-mx4.rules /etc/udev/rules.d/99-mx4.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+`sudo mx4 status` can confirm that the HID++ device is readable, but it is only a diagnostic. Normal use should not need `sudo` after the udev rule is active.
+
 Notes:
 
 - `mx4 status` prints battery, DPI, wheel, thumb-wheel, force-button, and haptic state when available.
