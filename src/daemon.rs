@@ -7,9 +7,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::Result;
-use crate::config;
-use crate::device;
+use crate::{Result, config, device, service};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const RECONNECT_DELAY: Duration = Duration::from_millis(750);
@@ -22,11 +20,16 @@ const MISSING_POLLS_BEFORE_DISCONNECT: u8 = 2;
 pub fn run(args: &[String]) -> Result<()> {
     match args {
         [] => run_loop(),
+        [flag] if flag == "--install" => service::install(),
         [flag] if flag == "--once" => {
             apply_once_with_retry();
             Ok(())
         }
-        _ => Err("try `mx4 daemon` or `mx4 daemon --once`".into()),
+        [flag] if flag == "--uninstall" => service::uninstall(),
+        _ => Err(
+            "try `mx4 daemon`, `mx4 daemon --install`, `mx4 daemon --once`, or `mx4 daemon --uninstall`"
+                .into(),
+        ),
     }
 }
 

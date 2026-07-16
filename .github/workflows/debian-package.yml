@@ -1,0 +1,41 @@
+name: Debian package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build amd64 package
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@v6
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential pkg-config libudev-dev
+
+      - name: Check tag version
+        run: |
+          crate_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mx4") | .version')"
+          test "$GITHUB_REF_NAME" = "v$crate_version"
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --version 3.7.0 --locked
+
+      - name: Build Debian package
+        run: cargo deb --locked
+
+      - name: Attach package to GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: target/debian/*.deb
+          fail_on_unmatched_files: true
+          generate_release_notes: true

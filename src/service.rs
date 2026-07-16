@@ -1,10 +1,11 @@
-//! Per-user background-service installation.
+//! Per-user background-service lifecycle management.
 //!
-//! Normal CLI use installs a small reconnect daemon on Linux or macOS. Generated service files are
-//! only rewritten when their contents change, so ordinary commands do not reload the service.
+//! The daemon is opt-in: these functions are called only by `mx4 daemon --install` and
+//! `mx4 daemon --uninstall`. Generated files are per-user and never require root privileges.
 
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,58 +14,63 @@ use crate::Result;
 const SERVICE_NAME: &str = "mx4.service";
 const LAUNCH_AGENT_LABEL: &str = "io.github.eriksremess.mx4";
 
-pub fn ensure_installed() -> Result<()> {
-    // Never create a root-owned per-user service when mx4 is being used through sudo. The explicit
-    // environment switch is also used by the generated service to avoid recursively installing it.
-    if should_skip_autostart(
-        env::var_os("MX4_SKIP_AUTOSTART"),
-        env::var_os("SUDO_USER"),
-        env::var_os("SUDO_UID"),
-    ) {
-        return Ok(());
-    }
-
+pub fn install() -> Result<()> {
+    ensure_user_context()?;
     match env::consts::OS {
-        "linux" => ensure_linux_service(),
-        "macos" => ensure_macos_launch_agent(),
-        _ => Ok(()),
+        "linux" => install_linux_service(),
+        "macos" => install_macos_launch_agent(),
+        os => Err(format!("background service installation isn't supported on {os}").into()),
     }
 }
 
-fn should_skip_autostart(
-    explicit_skip: Option<std::ffi::OsString>,
-    sudo_user: Option<std::ffi::OsString>,
-    sudo_uid: Option<std::ffi::OsString>,
-) -> bool {
-    explicit_skip.is_some() || sudo_user.is_some() || sudo_uid.is_some()
+pub fn uninstall() -> Result<()> {
+    ensure_user_context()?;
+    match env::consts::OS {
+        "linux" => uninstall_linux_service(),
+        "macos" => uninstall_macos_launch_agent(),
+        os => Err(format!("background service removal isn't supported on {os}").into()),
+    }
 }
 
-fn ensure_linux_service() -> Result<()> {
+fn ensure_user_context() -> Result<()> {
+    if env::var_os("SUDO_USER").is_some() || env::var_os("SUDO_UID").is_some() {
+        return Err("run daemon service commands without sudo".into());
+    }
+    Ok(())
+}
+
+fn install_linux_service() -> Result<()> {
     let service_dir = linux_service_dir()?;
     let service_path = service_dir.join(SERVICE_NAME);
     let executable = env::current_exe()?;
     let unit = linux_unit(&executable);
     let changed = write_if_changed(&service_path, &unit)?;
 
-    if !changed {
-        return Ok(());
+    if changed {
+        run("systemctl", ["--user", "daemon-reload"])?;
     }
 
-    run("systemctl", ["--user", "daemon-reload"])?;
     run("systemctl", ["--user", "enable", "--now", SERVICE_NAME])?;
     Ok(())
 }
 
-fn ensure_macos_launch_agent() -> Result<()> {
+fn uninstall_linux_service() -> Result<()> {
+    let service_path = linux_service_dir()?.join(SERVICE_NAME);
+
+    // A missing or already-stopped service is a successful uninstall.
+    let _ = run("systemctl", ["--user", "disable", "--now", SERVICE_NAME]);
+    if remove_if_exists(&service_path)? {
+        run("systemctl", ["--user", "daemon-reload"])?;
+    }
+    Ok(())
+}
+
+fn install_macos_launch_agent() -> Result<()> {
     let agent_dir = macos_launch_agents_dir()?;
     let agent_path = agent_dir.join(format!("{LAUNCH_AGENT_LABEL}.plist"));
     let executable = env::current_exe()?;
     let plist = macos_plist(&executable);
-    let changed = write_if_changed(&agent_path, &plist)?;
-
-    if !changed {
-        return Ok(());
-    }
+    write_if_changed(&agent_path, &plist)?;
 
     let uid = current_uid()?;
     let domain = format!("gui/{uid}");
@@ -80,6 +86,17 @@ fn ensure_macos_launch_agent() -> Result<()> {
     Ok(())
 }
 
+fn uninstall_macos_launch_agent() -> Result<()> {
+    let agent_path = macos_launch_agents_dir()?.join(format!("{LAUNCH_AGENT_LABEL}.plist"));
+    let uid = current_uid()?;
+    let domain = format!("gui/{uid}");
+    let path = agent_path.to_string_lossy().into_owned();
+
+    let _ = run_dynamic("launchctl", &["bootout", &domain, &path]);
+    remove_if_exists(&agent_path)?;
+    Ok(())
+}
+
 fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -92,6 +109,14 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
             fs::write(path, contents)?;
             Ok(true)
         }
+    }
+}
+
+fn remove_if_exists(path: &Path) -> Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -111,7 +136,7 @@ fn macos_launch_agents_dir() -> Result<PathBuf> {
 
 fn linux_unit(executable: &Path) -> String {
     format!(
-        "[Unit]\nDescription=mx4 reconnect daemon\nAfter=default.target\n\n[Service]\nType=simple\nEnvironment=MX4_SKIP_AUTOSTART=1\nExecStart={} daemon\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=mx4 reconnect daemon\nAfter=default.target\n\n[Service]\nType=simple\nExecStart={} daemon\nRestart=always\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
         systemd_quote(executable),
     )
 }
@@ -129,11 +154,6 @@ fn macos_plist(executable: &Path) -> String {
     <string>{}</string>
     <string>daemon</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>MX4_SKIP_AUTOSTART</key>
-    <string>1</string>
-  </dict>
   <key>KeepAlive</key>
   <true/>
   <key>RunAtLoad</key>
@@ -204,13 +224,13 @@ fn xml_escape(path: &Path) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{linux_unit, macos_plist, should_skip_autostart};
+    use super::{linux_unit, macos_plist};
 
     #[test]
     fn systemd_unit_runs_daemon_mode() {
         let unit = linux_unit(Path::new("/tmp/mx4"));
         assert!(unit.contains("ExecStart=\"/tmp/mx4\" daemon"));
-        assert!(unit.contains("MX4_SKIP_AUTOSTART=1"));
+        assert!(!unit.contains("MX4_SKIP_AUTOSTART"));
     }
 
     #[test]
@@ -218,17 +238,6 @@ mod tests {
         let plist = macos_plist(Path::new("/tmp/mx4"));
         assert!(plist.contains("<string>/tmp/mx4</string>"));
         assert!(plist.contains("<string>daemon</string>"));
-        assert!(plist.contains("MX4_SKIP_AUTOSTART"));
-    }
-
-    #[test]
-    fn skips_autostart_under_sudo() {
-        assert!(should_skip_autostart(None, Some("eriks".into()), None));
-        assert!(should_skip_autostart(None, None, Some("1000".into())));
-    }
-
-    #[test]
-    fn skips_autostart_when_explicitly_disabled() {
-        assert!(should_skip_autostart(Some("1".into()), None, None));
+        assert!(!plist.contains("MX4_SKIP_AUTOSTART"));
     }
 }

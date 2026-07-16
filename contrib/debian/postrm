@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+# Re-evaluate HID devices after the package's access rule has been removed.
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --subsystem-match=hidraw || true
+    fi
+fi
+
+exit 0

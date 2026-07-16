@@ -10,3 +10,16 @@ readme = "README.md"
 
 [dependencies]
 hidapi = "2.6.6"
+
+[package.metadata.deb]
+maintainer = "Eriks Remess <eriks@remess.lv>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+maintainer-scripts = "contrib/debian"
+assets = [
+    ["target/release/mx4", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/mx4/README.md", "644"],
+    ["LICENSE", "usr/share/doc/mx4/copyright", "644"],
+    ["contrib/udev/99-mx4.rules", "usr/lib/udev/rules.d/99-mx4.rules", "644"],
+]

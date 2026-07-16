@@ -1,15 +1,12 @@
 //! Command-line parsing and presentation for the `mx4` binary.
 
-use mx4::{Result, autostart, config, daemon, features};
+use mx4::{Result, config, daemon, features};
 
 const HELP_SYNTAX_WIDTH: usize = 34;
 
 const HELP_COMMANDS: &[(&str, &str)] = &[
     ("battery [--json]", "Show battery level and charging state"),
-    (
-        "daemon [--once]",
-        "Reapply saved settings continuously or once",
-    ),
+    ("daemon [<option>]", "Run or manage the reconnect daemon"),
     ("firmware [--json]", "Show mouse and Bolt receiver firmware"),
     (
         "haptic [<effect|range>...]",
@@ -22,6 +19,18 @@ const HELP_COMMANDS: &[(&str, &str)] = &[
     (
         "status [<target>] [--json]",
         "Show all status values or one target",
+    ),
+];
+
+const HELP_DAEMON_OPTIONS: &[(&str, &str)] = &[
+    (
+        "daemon --install",
+        "Install and start the per-user background service",
+    ),
+    ("daemon --once", "Apply saved settings once and exit"),
+    (
+        "daemon --uninstall",
+        "Stop and remove the per-user background service",
     ),
 ];
 
@@ -89,6 +98,7 @@ fn print_help() {
     println!("  mx4 <command> [arguments]");
     println!();
     print_help_section("Commands:", HELP_COMMANDS);
+    print_help_section("Daemon options:", HELP_DAEMON_OPTIONS);
     print_help_section("Set targets:", HELP_SET_TARGETS);
     print_help_section("Status targets (all accept --json):", HELP_STATUS_TARGETS);
     print_help_section("Options:", HELP_OPTIONS);
@@ -117,18 +127,6 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-
-    let wants_help_or_version = matches!(
-        args.first().map(String::as_str),
-        None | Some("-h" | "--help" | "-v" | "--version")
-    );
-    // Installing the reconnect daemon is a side effect, so informational commands remain safe to
-    // run during packaging, completion, and diagnostics.
-    if !wants_help_or_version {
-        if let Err(err) = autostart::ensure_installed() {
-            eprintln!("Warning: couldn't install background daemon: {err}");
-        }
-    }
 
     let mut args = args.into_iter();
 
@@ -321,7 +319,8 @@ fn parse_ratchet(value: &str) -> Result<config::WheelRatchet> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HELP_COMMANDS, HELP_OPTIONS, HELP_SET_TARGETS, HELP_STATUS_TARGETS, version_output,
+        HELP_COMMANDS, HELP_DAEMON_OPTIONS, HELP_OPTIONS, HELP_SET_TARGETS, HELP_STATUS_TARGETS,
+        version_output,
     };
 
     #[test]
@@ -333,6 +332,11 @@ mod tests {
         );
         assert!(!HELP_SET_TARGETS.is_empty());
         assert!(!HELP_STATUS_TARGETS.is_empty());
+        assert!(
+            HELP_DAEMON_OPTIONS
+                .iter()
+                .any(|(syntax, _)| *syntax == "daemon --install")
+        );
         assert!(
             HELP_OPTIONS
                 .iter()
