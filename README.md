@@ -18,6 +18,32 @@ sudo apt install build-essential pkg-config libudev-dev
 
 Cargo places the binary in `~/.cargo/bin`. Make sure that directory is included in `PATH`.
 
+### Install the Debian package
+
+Download the amd64 `.deb` from the [GitHub release](https://github.com/EriksRemess/mx4/releases) you want to install, then run:
+
+```bash
+sudo apt install ./mx4_*_amd64.deb
+```
+
+The package contains a prebuilt binary and the udev access rule. APT installs its runtime dependencies automatically, so Rust, `build-essential`, `pkg-config`, and `libudev-dev` are not required.
+
+To uninstall, remove the opt-in per-user daemon before purging the package:
+
+```bash
+mx4 daemon --uninstall
+sudo apt purge mx4
+```
+
+APT does not remove files generated in a user's home directory. If the package was purged before the daemon was uninstalled, clean up the remaining user service with:
+
+```bash
+systemctl --user disable --now mx4.service
+rm -f ~/.config/systemd/user/mx4.service
+systemctl --user daemon-reload
+systemctl --user reset-failed mx4.service
+```
+
 ### Install from source
 
 ```bash
@@ -128,7 +154,7 @@ mx4 daemon --uninstall # stop and remove the background service
 
 ## Linux permissions
 
-If `mx4 status` reports a `/dev/hidraw... Permission denied` error, install the udev rule once and reconnect the mouse or Logi Bolt receiver:
+The Debian package installs and reloads the udev access rule automatically. For Cargo or source installations, if `mx4 status` reports a `/dev/hidraw... Permission denied` error, install the rule once and reconnect the mouse or Logi Bolt receiver:
 
 ```bash
 sudo install -Dm644 contrib/udev/99-mx4.rules /etc/udev/rules.d/99-mx4.rules
