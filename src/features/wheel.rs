@@ -1,3 +1,8 @@
+//! SmartShift, high-resolution scroll wheel, and thumb-wheel features.
+//!
+//! Logitech exposes these as three separate HID++ features. Setters use read-modify-write requests
+//! where flags share a payload so changing one option preserves the others.
+
 use crate::Result;
 use crate::device::{feature, open, req};
 
@@ -168,6 +173,7 @@ fn write_smart_shift_state(
     idx: u8,
     state: &SmartShiftState,
 ) -> Result<()> {
+    // All three SmartShift settings occupy one payload and must be written together.
     let feature_idx = feature(dev, idx, SMART_SHIFT_ENHANCED)?;
     req(
         dev,
@@ -188,6 +194,7 @@ fn parse_smart_shift_reply(reply: &[u8]) -> Result<SmartShiftState> {
 }
 
 fn parse_hires_reply(reply: &[u8]) -> Result<HiresWheelStatus> {
+    // Invert, high-resolution mode, and diversion are independent bits in one byte.
     let flags = *reply.get(4).ok_or("the wheel reply was too short")?;
     Ok(HiresWheelStatus {
         invert: flags & WHEEL_INVERT_MASK != 0,
@@ -197,6 +204,7 @@ fn parse_hires_reply(reply: &[u8]) -> Result<HiresWheelStatus> {
 }
 
 fn parse_thumb_reply(reply: &[u8]) -> Result<ThumbWheelStatus> {
+    // Thumb-wheel mode and direction live in different bytes, unlike the main wheel flags.
     let bytes = reply
         .get(4..6)
         .ok_or("the thumb-wheel reply was too short")?;
@@ -209,6 +217,7 @@ fn parse_thumb_reply(reply: &[u8]) -> Result<ThumbWheelStatus> {
 
 fn set_hires_flag(dev: &hidapi::HidDevice, idx: u8, mask: u8, enabled: bool) -> Result<()> {
     let feature_idx = feature(dev, idx, HIRES_WHEEL)?;
+    // Preserve every unrelated flag reported by the device.
     let mut reply = req(dev, idx, feature_idx, 0x01, &[])?;
     let flags = reply.get_mut(4).ok_or("the wheel reply was too short")?;
     *flags = apply_mask_u8(*flags, mask, enabled);

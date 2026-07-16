@@ -1,3 +1,5 @@
+//! Library interface for MX Master 4 discovery, status, settings, persistence, and reconnect logic.
+
 pub mod autostart;
 pub mod config;
 pub mod daemon;

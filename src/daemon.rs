@@ -1,3 +1,8 @@
+//! Reconnect watcher that restores persisted settings.
+//!
+//! The daemon polls for the active mouse transport, debounces brief disappearances, retries failed
+//! writes, and periodically reconciles settings in case another application changed the device.
+
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -37,6 +42,7 @@ fn run_loop() -> Result<()> {
         if now_connected {
             missing_polls = 0;
 
+            // The HID node can appear slightly before the mouse is ready for feature requests.
             if !connected {
                 thread::sleep(RECONNECT_DELAY);
             }
@@ -56,6 +62,8 @@ fn run_loop() -> Result<()> {
 
             connected = true;
         } else if connected {
+            // Require two failed polls before declaring a disconnect; a single miss can occur while
+            // the transport or kernel driver is briefly busy.
             missing_polls = missing_polls.saturating_add(1);
 
             if missing_polls >= MISSING_POLLS_BEFORE_DISCONNECT {
@@ -72,6 +80,8 @@ fn should_reconcile(
     last_apply_attempt: Option<Instant>,
     last_apply_success: Option<Instant>,
 ) -> bool {
+    // Failed writes retry quickly. Successful writes are refreshed less often to correct drift
+    // without continuously sending traffic to the mouse.
     let retry_ready =
         last_apply_attempt.is_none_or(|instant| instant.elapsed() >= FAILURE_RETRY_INTERVAL);
     let reconcile_due =
@@ -95,6 +105,8 @@ fn apply_once_with_retry() -> bool {
 
     let mut last_errors = Vec::new();
 
+    // A reconnecting mouse may accept some features before others, so retry the complete best-effort
+    // pass and report only the errors still present after the final attempt.
     for attempt in 0..APPLY_ATTEMPTS {
         let errors = config::apply_best_effort(&config);
 

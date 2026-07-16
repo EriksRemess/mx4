@@ -1,3 +1,5 @@
+//! Haptic status, strength, and effect playback.
+
 use hidapi::HidDevice;
 use std::io::{self, Write};
 use std::thread;
@@ -25,6 +27,7 @@ pub fn play(args: &[String]) -> Result<()> {
     };
     let (dev, idx) = open()?;
 
+    // Leave enough time for each physical effect to finish before triggering the next one.
     for (i, effect) in effects.iter().copied().enumerate() {
         send_haptic(&dev, idx, effect)?;
 
@@ -105,6 +108,8 @@ pub fn read_status() -> Result<HapticStatus> {
 
 pub fn set_strength(dev: &HidDevice, idx: u8, strength: u8) -> Result<()> {
     let feature_idx = feature(dev, idx, HAPTIC)?;
+    // The first byte is an enable flag. Disabled mode still carries a placeholder level, while an
+    // enabled request carries the caller's actual strength.
     let params = if strength == 0 {
         [0x00, 0x32]
     } else {
@@ -163,6 +168,8 @@ pub fn json_status() -> Result<String> {
 }
 
 pub fn packet(idx: u8, feature_idx: u8, method: u8, params: &[u8]) -> [u8; 7] {
+    // Effect playback is fire-and-forget, so build the packet with a dedicated software ID and send
+    // it directly instead of waiting for the generic request/reply matcher.
     let mut pkt = [0u8; 7];
     pkt[0] = SHORT;
     pkt[1] = idx;
@@ -174,6 +181,8 @@ pub fn packet(idx: u8, feature_idx: u8, method: u8, params: &[u8]) -> [u8; 7] {
 
 fn parse_range(arg: &str) -> Result<Option<(u8, u8)>> {
     let trimmed = arg.trim();
+    // Shell brace expansion may turn `{0..3}` into separate arguments before mx4 sees it. Accept the
+    // braced form too for quoted input and tests, alongside the plain `0..3` form.
     let inner = if trimmed.starts_with('{') && trimmed.ends_with('}') && trimmed.len() >= 2 {
         &trimmed[1..trimmed.len() - 1]
     } else {

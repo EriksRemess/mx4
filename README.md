@@ -53,6 +53,8 @@ mx4 haptic 0..3
 mx4 haptic '{0..14}'
 mx4 battery
 mx4 battery --json
+mx4 firmware
+mx4 firmware --json
 ```
 
 Haptic strength presets:
@@ -81,6 +83,7 @@ Notes:
 - `mx4 status --json` prints all readable status values as one JSON object, using `null` for unavailable features.
 - `mx4 status haptic` prints the configured haptic level when the device exposes it.
 - `mx4 battery` remains as a shorter alias for battery status.
+- `mx4 firmware` prints the mouse firmware entities and Bolt receiver firmware when available.
 - Persistent `mx4 set ...` commands save the applied value to a local config file so it can be restored later.
 - `mx4 set host ...` and `mx4 haptic ...` do not persist anything.
 - `mx4 daemon` polls for reconnects and reapplies saved settings when the mouse comes back.

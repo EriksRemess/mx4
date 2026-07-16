@@ -1,3 +1,5 @@
+//! Adjustable sensor resolution through HID++ feature `0x2201`.
+
 use crate::Result;
 use crate::device::{feature, open, req};
 
@@ -62,6 +64,7 @@ pub fn json_status() -> Result<String> {
 }
 
 pub fn parse_status_reply(reply: &[u8]) -> Result<u32> {
+    // Logitech encodes DPI as an unsigned 24-bit big-endian value in the response payload.
     let value = [
         0,
         *reply.get(4).ok_or("the dpi reply was too short")?,
@@ -73,6 +76,7 @@ pub fn parse_status_reply(reply: &[u8]) -> Result<u32> {
 }
 
 pub fn payload(dpi: u32) -> [u8; 3] {
+    // The feature accepts the same 24-bit representation, so discard the high byte of the u32.
     let bytes = dpi.to_be_bytes();
     [bytes[1], bytes[2], bytes[3]]
 }

@@ -1,3 +1,8 @@
+//! Persistence for settings that should survive reconnects.
+//!
+//! The format is a deliberately small, dependency-free TOML subset. Unknown keys do not make loading
+//! fail, so a binary can tolerate config fields it does not yet understand.
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,6 +35,7 @@ impl WheelRatchet {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SavedConfig {
+    // `None` means mx4 should leave that device setting alone when reconnecting.
     pub dpi: Option<u32>,
     pub wheel_ratchet: Option<WheelRatchet>,
     pub wheel_ratchet_speed: Option<u8>,
@@ -107,6 +113,8 @@ pub fn apply_saved_settings() -> Result<()> {
 pub fn apply_best_effort(config: &SavedConfig) -> Vec<String> {
     let mut errors = Vec::new();
 
+    // Each feature opens the current transport independently. Continue after failures so one
+    // unsupported or temporarily busy feature does not prevent the remaining settings applying.
     if let Some(dpi) = config.dpi {
         if let Err(err) = features::dpi::set(&dpi.to_string()) {
             errors.push(format!("dpi: {err}"));
@@ -213,6 +221,8 @@ fn load_from_path(path: &Path) -> Result<SavedConfig> {
 fn parse(data: &str) -> Result<SavedConfig> {
     let mut config = SavedConfig::default();
 
+    // Only the scalar shapes emitted by `to_toml` are supported; a full TOML parser would be
+    // unnecessary for this flat file and would add a dependency to the tiny crate.
     for raw_line in data.lines() {
         let line = raw_line.trim();
 

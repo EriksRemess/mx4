@@ -1,3 +1,8 @@
+//! Per-user background-service installation.
+//!
+//! Normal CLI use installs a small reconnect daemon on Linux or macOS. Generated service files are
+//! only rewritten when their contents change, so ordinary commands do not reload the service.
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +14,8 @@ const SERVICE_NAME: &str = "mx4.service";
 const LAUNCH_AGENT_LABEL: &str = "io.github.eriksremess.mx4";
 
 pub fn ensure_installed() -> Result<()> {
+    // Never create a root-owned per-user service when mx4 is being used through sudo. The explicit
+    // environment switch is also used by the generated service to avoid recursively installing it.
     if should_skip_autostart(
         env::var_os("MX4_SKIP_AUTOSTART"),
         env::var_os("SUDO_USER"),
@@ -64,6 +71,8 @@ fn ensure_macos_launch_agent() -> Result<()> {
     let path = agent_path.to_string_lossy().into_owned();
     let service = format!("{domain}/{LAUNCH_AGENT_LABEL}");
 
+    // A first install has nothing to boot out, and enable/kickstart are harmless conveniences after
+    // a successful bootstrap, so only bootstrap is required to succeed.
     let _ = run_dynamic("launchctl", &["bootout", &domain, &path]);
     run_dynamic("launchctl", &["bootstrap", &domain, &path])?;
     let _ = run_dynamic("launchctl", &["enable", &service]);
@@ -76,6 +85,7 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
         fs::create_dir_all(parent)?;
     }
 
+    // Avoid touching timestamps and restarting an already-correct daemon on every CLI invocation.
     match fs::read_to_string(path) {
         Ok(existing) if existing == contents => Ok(false),
         Ok(_) | Err(_) => {

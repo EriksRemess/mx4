@@ -1,4 +1,112 @@
+//! Command-line parsing and presentation for the `mx4` binary.
+
 use mx4::{Result, autostart, config, daemon, features};
+
+const HELP_SYNTAX_WIDTH: usize = 34;
+
+const HELP_COMMANDS: &[(&str, &str)] = &[
+    ("battery [--json]", "Show battery level and charging state"),
+    (
+        "daemon [--once]",
+        "Reapply saved settings continuously or once",
+    ),
+    ("firmware [--json]", "Show mouse and Bolt receiver firmware"),
+    (
+        "haptic [<effect|range>...]",
+        "Play haptic effects from 0 to 14",
+    ),
+    (
+        "set <target> ...",
+        "Change a setting; most settings are saved",
+    ),
+    (
+        "status [<target>] [--json]",
+        "Show all status values or one target",
+    ),
+];
+
+const HELP_SET_TARGETS: &[(&str, &str)] = &[
+    ("dpi <200-8000>", "Set sensor resolution in DPI"),
+    (
+        "force-button <value>",
+        "Set the force-sensing button threshold",
+    ),
+    ("host <1|2|3>", "Switch the active Easy-Switch host"),
+    (
+        "strength <0-100|preset>",
+        "Set haptic strength or turn it off",
+    ),
+    (
+        "thumb-wheel divert <on|off>",
+        "Route thumb-wheel events through HID++",
+    ),
+    (
+        "thumb-wheel invert <on|off>",
+        "Reverse the thumb-wheel direction",
+    ),
+    (
+        "wheel divert <on|off>",
+        "Route scroll-wheel events through HID++",
+    ),
+    ("wheel force <1-100>", "Set ratchet resistance"),
+    (
+        "wheel invert <on|off>",
+        "Reverse the scroll-wheel direction",
+    ),
+    (
+        "wheel ratchet <free|ratchet>",
+        "Select free-spin or ratchet mode",
+    ),
+    (
+        "wheel ratchet-speed <0-50>",
+        "Set the SmartShift transition speed",
+    ),
+    (
+        "wheel resolution <on|off>",
+        "Toggle high-resolution scrolling",
+    ),
+];
+
+const HELP_STATUS_TARGETS: &[(&str, &str)] = &[
+    ("battery", "Battery level and charging state"),
+    ("dpi", "Current sensor resolution"),
+    ("force-button", "Current threshold and supported range"),
+    ("haptic", "Haptic state and strength"),
+    ("thumb-wheel", "Thumb-wheel direction and diversion state"),
+    ("wheel", "Ratchet, SmartShift, and scroll-wheel state"),
+];
+
+const HELP_OPTIONS: &[(&str, &str)] = &[
+    ("-h | --help", "Show this help"),
+    ("--json", "Print machine-readable JSON where supported"),
+    ("-v | --version", "Show mx4 and hidapi versions"),
+];
+
+fn print_help() {
+    println!("mx4 - MX Master 4 status and settings");
+    println!();
+    println!("Usage:");
+    println!("  mx4 <command> [arguments]");
+    println!();
+    print_help_section("Commands:", HELP_COMMANDS);
+    print_help_section("Set targets:", HELP_SET_TARGETS);
+    print_help_section("Status targets (all accept --json):", HELP_STATUS_TARGETS);
+    print_help_section("Options:", HELP_OPTIONS);
+    println!("Haptic strength presets: off, subtle, low, medium, high");
+    println!("Haptic ranges: 0..14 or {{0..14}}");
+}
+
+fn print_help_section(title: &str, rows: &[(&str, &str)]) {
+    println!("{title}");
+    for (syntax, description) in rows {
+        // One shared width keeps every description aligned, even across separate help sections.
+        println!(
+            "  {syntax:<width$}  {description}",
+            width = HELP_SYNTAX_WIDTH
+        );
+    }
+    println!();
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -14,6 +122,8 @@ fn run() -> Result<()> {
         args.first().map(String::as_str),
         None | Some("-h" | "--help" | "-v" | "--version")
     );
+    // Installing the reconnect daemon is a side effect, so informational commands remain safe to
+    // run during packaging, completion, and diagnostics.
     if !wants_help_or_version {
         if let Err(err) = autostart::ensure_installed() {
             eprintln!("Warning: couldn't install background daemon: {err}");
@@ -24,30 +134,7 @@ fn run() -> Result<()> {
 
     match args.next().as_deref() {
         None | Some("-h" | "--help") => {
-            println!("Usage:");
-            println!("  mx4 -v|--version");
-            println!("  mx4 status [--json]");
-            println!("  mx4 status battery [--json]");
-            println!("  mx4 status dpi [--json]");
-            println!("  mx4 status haptic [--json]");
-            println!("  mx4 status wheel [--json]");
-            println!("  mx4 status thumb-wheel [--json]");
-            println!("  mx4 status force-button [--json]");
-            println!("  mx4 set strength <0-100|off|subtle|low|medium|high>");
-            println!("  mx4 set host <1|2|3>");
-            println!("  mx4 set dpi <value>");
-            println!("  mx4 set wheel ratchet <free|ratchet>");
-            println!("  mx4 set wheel ratchet-speed <0-50>");
-            println!("  mx4 set wheel force <1-100>");
-            println!("  mx4 set wheel invert <on|off>");
-            println!("  mx4 set wheel resolution <on|off>");
-            println!("  mx4 set wheel divert <on|off>");
-            println!("  mx4 set thumb-wheel invert <on|off>");
-            println!("  mx4 set thumb-wheel divert <on|off>");
-            println!("  mx4 set force-button <value>");
-            println!("  mx4 daemon [--once]");
-            println!("  mx4 haptic <0-14|0..14|{{0..14}}>...");
-            println!("  mx4 battery [--json]");
+            print_help();
         }
         Some("-v" | "--version") => println!("{}", version_output()),
         Some("status") => status(args.collect())?,
@@ -55,9 +142,10 @@ fn run() -> Result<()> {
         Some("daemon") => daemon::run(&args.collect::<Vec<_>>())?,
         Some("haptic") => haptic(args.collect())?,
         Some("battery") => features::battery::status(args.next().as_deref())?,
+        Some("firmware") => features::firmware::status(args.next().as_deref())?,
         Some(_) => {
             return Err(
-                "I only know `status`, `set`, `daemon`, `haptic`, and `battery` right now".into(),
+                "I only know `status`, `set`, `daemon`, `haptic`, `battery`, and `firmware` right now".into(),
             );
         }
     }
@@ -107,6 +195,8 @@ fn status(args: Vec<String>) -> Result<()> {
 }
 
 fn json_status() -> String {
+    // Status is intentionally best-effort: unsupported features remain visible as `null` instead of
+    // making the entire machine-readable snapshot fail.
     format!(
         r#"{{"battery":{},"dpi":{},"wheel":{},"thumb_wheel":{},"force_button":{},"haptic":{}}}"#,
         best_effort_json(features::battery::json_status()),
@@ -123,6 +213,8 @@ fn best_effort_json(result: Result<String>) -> String {
 }
 
 fn set(args: Vec<String>) -> Result<()> {
+    // Each helper applies the live device change before updating the saved reconnect configuration.
+    // Invalid or unsupported values therefore never become persistent desired state.
     match args.as_slice() {
         [target, value] if target == "strength" => set_strength(value),
         [target, value] if target == "host" => features::host::set(value),
@@ -228,7 +320,25 @@ fn parse_ratchet(value: &str) -> Result<config::WheelRatchet> {
 
 #[cfg(test)]
 mod tests {
-    use super::version_output;
+    use super::{
+        HELP_COMMANDS, HELP_OPTIONS, HELP_SET_TARGETS, HELP_STATUS_TARGETS, version_output,
+    };
+
+    #[test]
+    fn help_explains_commands_targets_and_options() {
+        assert!(
+            HELP_COMMANDS
+                .iter()
+                .any(|(syntax, _)| syntax.starts_with("firmware "))
+        );
+        assert!(!HELP_SET_TARGETS.is_empty());
+        assert!(!HELP_STATUS_TARGETS.is_empty());
+        assert!(
+            HELP_OPTIONS
+                .iter()
+                .any(|(syntax, _)| *syntax == "-h | --help")
+        );
+    }
 
     #[test]
     fn version_output_includes_package_and_hidapi_versions() {

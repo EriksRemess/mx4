@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    // `mx4 --version` reports the resolved hidapi version, not merely the semver requirement from
+    // Cargo.toml. Re-run whenever dependency resolution changes.
     println!("cargo:rerun-if-changed=Cargo.lock");
 
     let version =
@@ -12,6 +14,8 @@ fn main() {
 fn resolved_dependency_version(lockfile: impl AsRef<Path>, package: &str) -> Option<String> {
     let lockfile = fs::read_to_string(lockfile).ok()?;
 
+    // Cargo.lock is regular TOML, but finding two scalar fields in each package block does not
+    // justify adding a TOML dependency to the build script.
     for section in lockfile.split("\n\n") {
         if !section.lines().any(|line| line == "[[package]]") {
             continue;

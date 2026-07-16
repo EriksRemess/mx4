@@ -1,3 +1,5 @@
+//! Battery status with support for both generations exposed by Logitech devices.
+
 use crate::Result;
 use crate::device::{feature, open, req};
 
@@ -44,6 +46,8 @@ pub fn json_status() -> Result<String> {
 
 pub fn read_status() -> Result<BatteryStatus> {
     let (dev, idx) = open()?;
+    // Prefer the newer unified feature, but retain the older battery feature for firmware variants
+    // that do not expose it. Their status methods and charging-state byte offsets differ.
     let (feature, unified) = match feature(&dev, idx, UNIFIED_BATTERY) {
         Ok(feature) => (feature, true),
         Err(_) => (feature(&dev, idx, BATTERY)?, false),

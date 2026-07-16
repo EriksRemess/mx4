@@ -1,3 +1,5 @@
+//! Force-sensing button threshold and device-provided limits.
+
 use crate::Result;
 use crate::device::{feature, open, req};
 
@@ -28,6 +30,8 @@ pub fn set(arg: &str) -> Result<()> {
     let (dev, idx) = open()?;
     let feature = feature(&dev, idx, FORCE_SENSING_BUTTON)?;
     let info = read_info(&dev, idx, feature)?;
+    // Limits vary by hardware/firmware, so validate against the live feature metadata instead of a
+    // hard-coded CLI range.
     let value = parse(arg, info.min_value, info.max_value)?;
 
     if !info.changeable {
@@ -80,6 +84,8 @@ pub fn read_status() -> Result<(u16, ForceButtonInfo)> {
 }
 
 fn parse_info_reply(reply: &[u8]) -> Result<ForceButtonInfo> {
+    // The first word contains capability flags; maximum and minimum thresholds are later words in
+    // the eight-byte feature payload.
     let data = reply
         .get(4..12)
         .ok_or("the force-button reply was too short")?;
