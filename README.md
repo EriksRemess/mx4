@@ -154,7 +154,7 @@ mx4 daemon --uninstall # stop and remove the background service
 
 ## Linux permissions
 
-The Debian package installs and reloads the udev access rule automatically. For Cargo or source installations, if `mx4 status` reports a `/dev/hidraw... Permission denied` error, install the rule once and reconnect the mouse or Logi Bolt receiver:
+The Debian package installs and reloads the udev access rule automatically. For Cargo or source installations, if a targeted command such as `mx4 status dpi` reports a `/dev/hidraw... Permission denied` error, install the rule once and reconnect the mouse or Logi Bolt receiver:
 
 ```bash
 sudo install -Dm644 contrib/udev/99-mx4.rules /etc/udev/rules.d/99-mx4.rules

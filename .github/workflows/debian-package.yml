@@ -16,11 +16,13 @@ jobs:
     steps:
       - name: Check out tag
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes build-essential pkg-config libudev-dev
+          sudo apt-get install --yes build-essential lintian pkg-config libudev-dev
 
       - name: Check tag version
         run: |
@@ -30,8 +32,14 @@ jobs:
       - name: Install cargo-deb
         run: cargo install cargo-deb --version 3.7.0 --locked
 
+      - name: Generate Debian changelog
+        run: ./scripts/generate-debian-changelog "$GITHUB_REF_NAME" > contrib/debian/changelog
+
       - name: Build Debian package
         run: cargo deb --locked
+
+      - name: Validate Debian package
+        run: lintian --fail-on error target/debian/*.deb
 
       - name: Attach package to GitHub release
         uses: softprops/action-gh-release@v3

@@ -14,12 +14,16 @@ pub fn status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 status dpi --json` if you want JSON".into()),
     };
 
+    let dpi = read_status()?;
+    println!("{}", format_status(dpi, json));
+    Ok(())
+}
+
+pub fn print_best_effort() {
     match read_status() {
-        Ok(dpi) => println!("{}", format_status(dpi, json)),
-        Err(_) if json => println!("null"),
+        Ok(dpi) => println!("{}", format_status(dpi, false)),
         Err(_) => println!("DPI: unavailable"),
     }
-    Ok(())
 }
 
 pub fn set(arg: &str) -> Result<()> {

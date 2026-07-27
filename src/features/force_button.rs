@@ -18,12 +18,16 @@ pub fn status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 status force-button --json` if you want JSON".into()),
     };
 
+    let (value, info) = read_status()?;
+    println!("{}", format_status(value, &info, json));
+    Ok(())
+}
+
+pub fn print_best_effort() {
     match read_status() {
-        Ok((value, info)) => println!("{}", format_status(value, &info, json)),
-        Err(_) if json => println!("null"),
+        Ok((value, info)) => println!("{}", format_status(value, &info, false)),
         Err(_) => println!("Force Button: unavailable"),
     }
-    Ok(())
 }
 
 pub fn set(arg: &str) -> Result<()> {

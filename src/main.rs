@@ -139,8 +139,14 @@ fn run() -> Result<()> {
         Some("set") => set(args.collect())?,
         Some("daemon") => daemon::run(&args.collect::<Vec<_>>())?,
         Some("haptic") => haptic(args.collect())?,
-        Some("battery") => features::battery::status(args.next().as_deref())?,
-        Some("firmware") => features::firmware::status(args.next().as_deref())?,
+        Some("battery") => {
+            let arg = optional_arg(args.collect(), "try `mx4 battery --json`")?;
+            features::battery::status(arg.as_deref())?;
+        }
+        Some("firmware") => {
+            let arg = optional_arg(args.collect(), "try `mx4 firmware --json`")?;
+            features::firmware::status(arg.as_deref())?;
+        }
         Some(_) => {
             return Err(
                 "I only know `status`, `set`, `daemon`, `haptic`, `battery`, and `firmware` right now".into(),
@@ -149,6 +155,17 @@ fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn optional_arg(args: Vec<String>, usage: &'static str) -> Result<Option<String>> {
+    let mut args = args.into_iter();
+    let arg = args.next();
+
+    if args.next().is_some() {
+        return Err(usage.into());
+    }
+
+    Ok(arg)
 }
 
 fn version_output() -> String {
@@ -163,11 +180,11 @@ fn status(args: Vec<String>) -> Result<()> {
     match args.as_slice() {
         [] => {
             features::battery::print_best_effort();
-            features::dpi::status(None)?;
-            features::wheel::status(None)?;
-            features::wheel::thumb_status(None)?;
-            features::force_button::status(None)?;
-            features::haptic::status(None)?;
+            features::dpi::print_best_effort();
+            features::wheel::print_best_effort();
+            features::wheel::print_thumb_best_effort();
+            features::force_button::print_best_effort();
+            features::haptic::print_best_effort();
             Ok(())
         }
         [flag] if flag == "--json" => {
@@ -230,10 +247,10 @@ fn set(args: Vec<String>) -> Result<()> {
 }
 
 fn haptic(args: Vec<String>) -> Result<()> {
-    if let [mode, _value] = args.as_slice() {
-        if mode == "strength" {
-            return Err("use `mx4 set strength ...` instead of `mx4 haptic strength ...`".into());
-        }
+    if let [mode, _value] = args.as_slice()
+        && mode == "strength"
+    {
+        return Err("use `mx4 set strength ...` instead of `mx4 haptic strength ...`".into());
     }
 
     features::haptic::play(&args)
@@ -320,7 +337,7 @@ fn parse_ratchet(value: &str) -> Result<config::WheelRatchet> {
 mod tests {
     use super::{
         HELP_COMMANDS, HELP_DAEMON_OPTIONS, HELP_OPTIONS, HELP_SET_TARGETS, HELP_STATUS_TARGETS,
-        version_output,
+        optional_arg, version_output,
     };
 
     #[test]
@@ -349,5 +366,11 @@ mod tests {
         let output = version_output();
         assert!(output.contains(env!("CARGO_PKG_VERSION")));
         assert!(output.contains("hidapi "));
+    }
+
+    #[test]
+    fn optional_arg_rejects_trailing_arguments() {
+        let args = vec!["--json".to_string(), "unexpected".to_string()];
+        assert!(optional_arg(args, "usage").is_err());
     }
 }

@@ -42,13 +42,8 @@ pub fn status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 status wheel --json` if you want JSON".into()),
     };
 
-    match read_status() {
-        Ok((smart_shift, hires)) => {
-            println!("{}", format_status(&smart_shift, &hires, json));
-        }
-        Err(_) if json => println!("null"),
-        Err(_) => println!("Wheel: unavailable"),
-    }
+    let (smart_shift, hires) = read_status()?;
+    println!("{}", format_status(&smart_shift, &hires, json));
     Ok(())
 }
 
@@ -59,12 +54,25 @@ pub fn thumb_status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 status thumb-wheel --json` if you want JSON".into()),
     };
 
+    let status = read_thumb_status()?;
+    println!("{}", format_thumb_status(&status, json));
+    Ok(())
+}
+
+pub fn print_best_effort() {
+    match read_status() {
+        Ok((smart_shift, hires)) => {
+            println!("{}", format_status(&smart_shift, &hires, false));
+        }
+        Err(_) => println!("Wheel: unavailable"),
+    }
+}
+
+pub fn print_thumb_best_effort() {
     match read_thumb_status() {
-        Ok(status) => println!("{}", format_thumb_status(&status, json)),
-        Err(_) if json => println!("null"),
+        Ok(status) => println!("{}", format_thumb_status(&status, false)),
         Err(_) => println!("Thumb Wheel: unavailable"),
     }
-    Ok(())
 }
 
 pub fn set(setting: &str, value: &str) -> Result<()> {

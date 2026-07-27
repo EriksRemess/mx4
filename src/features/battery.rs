@@ -18,11 +18,8 @@ pub fn status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 battery --json` if you want JSON".into()),
     };
 
-    match read_status() {
-        Ok(status) => println!("{}", format_status(&status, json)),
-        Err(_) if json => println!("null"),
-        Err(_) => println!("Battery: unavailable"),
-    }
+    let status = read_status()?;
+    println!("{}", format_status(&status, json));
     Ok(())
 }
 

@@ -116,72 +116,96 @@ pub fn apply_best_effort(config: &SavedConfig) -> Vec<String> {
     // Each feature opens the current transport independently. Continue after failures so one
     // unsupported or temporarily busy feature does not prevent the remaining settings applying.
     if let Some(dpi) = config.dpi {
-        if let Err(err) = features::dpi::set(&dpi.to_string()) {
-            errors.push(format!("dpi: {err}"));
-        }
+        collect_error(&mut errors, "dpi", features::dpi::set(&dpi.to_string()));
     }
 
     if let Some(ratchet) = config.wheel_ratchet {
-        if let Err(err) = features::wheel::set("ratchet", ratchet.as_str()) {
-            errors.push(format!("wheel ratchet: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel ratchet",
+            features::wheel::set("ratchet", ratchet.as_str()),
+        );
     }
 
     if let Some(speed) = config.wheel_ratchet_speed {
-        if let Err(err) = features::wheel::set("ratchet-speed", &speed.to_string()) {
-            errors.push(format!("wheel ratchet-speed: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel ratchet-speed",
+            features::wheel::set("ratchet-speed", &speed.to_string()),
+        );
     }
 
     if let Some(force) = config.wheel_force {
-        if let Err(err) = features::wheel::set("force", &force.to_string()) {
-            errors.push(format!("wheel force: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel force",
+            features::wheel::set("force", &force.to_string()),
+        );
     }
 
     if let Some(invert) = config.wheel_invert {
-        if let Err(err) = features::wheel::set("invert", on_off(invert)) {
-            errors.push(format!("wheel invert: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel invert",
+            features::wheel::set("invert", on_off(invert)),
+        );
     }
 
     if let Some(resolution) = config.wheel_resolution {
-        if let Err(err) = features::wheel::set("resolution", on_off(resolution)) {
-            errors.push(format!("wheel resolution: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel resolution",
+            features::wheel::set("resolution", on_off(resolution)),
+        );
     }
 
     if let Some(divert) = config.wheel_divert {
-        if let Err(err) = features::wheel::set("divert", on_off(divert)) {
-            errors.push(format!("wheel divert: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "wheel divert",
+            features::wheel::set("divert", on_off(divert)),
+        );
     }
 
     if let Some(invert) = config.thumb_wheel_invert {
-        if let Err(err) = features::wheel::set_thumb("invert", on_off(invert)) {
-            errors.push(format!("thumb-wheel invert: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "thumb-wheel invert",
+            features::wheel::set_thumb("invert", on_off(invert)),
+        );
     }
 
     if let Some(divert) = config.thumb_wheel_divert {
-        if let Err(err) = features::wheel::set_thumb("divert", on_off(divert)) {
-            errors.push(format!("thumb-wheel divert: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "thumb-wheel divert",
+            features::wheel::set_thumb("divert", on_off(divert)),
+        );
     }
 
     if let Some(force_button) = config.force_button {
-        if let Err(err) = features::force_button::set(&force_button.to_string()) {
-            errors.push(format!("force-button: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "force-button",
+            features::force_button::set(&force_button.to_string()),
+        );
     }
 
     if let Some(haptic_strength) = config.haptic_strength {
-        if let Err(err) = features::haptic::set_strength_arg(&haptic_strength.to_string()) {
-            errors.push(format!("haptic strength: {err}"));
-        }
+        collect_error(
+            &mut errors,
+            "haptic strength",
+            features::haptic::set_strength_arg(&haptic_strength.to_string()),
+        );
     }
 
     errors
+}
+
+fn collect_error(errors: &mut Vec<String>, label: &str, result: Result<()>) {
+    if let Err(err) = result {
+        errors.push(format!("{label}: {err}"));
+    }
 }
 
 fn apply(config: &SavedConfig) -> Result<()> {

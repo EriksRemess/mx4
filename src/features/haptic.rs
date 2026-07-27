@@ -46,12 +46,16 @@ pub fn status(arg: Option<&str>) -> Result<()> {
         Some(_) => return Err("try `mx4 status haptic --json` if you want JSON".into()),
     };
 
+    let status = read_status()?;
+    println!("{}", format_status(&status, json));
+    Ok(())
+}
+
+pub fn print_best_effort() {
     match read_status() {
-        Ok(status) => println!("{}", format_status(&status, json)),
-        Err(_) if json => println!("null"),
+        Ok(status) => println!("{}", format_status(&status, false)),
         Err(_) => println!("Haptic: unavailable"),
     }
-    Ok(())
 }
 
 pub fn set_strength_arg(arg: &str) -> Result<()> {

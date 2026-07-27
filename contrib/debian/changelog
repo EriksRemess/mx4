@@ -1,0 +1,5 @@
+mx4 (0.6.0-1) unstable; urgency=medium
+
+  * feat(daemon): make reconnect daemon opt-in and add Debian release workflow
+
+ -- Eriks Remess <eriks@remess.lv>  Thu, 16 Jul 2026 15:55:00 +0300

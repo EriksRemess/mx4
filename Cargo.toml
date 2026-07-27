@@ -17,6 +17,8 @@ section = "utils"
 priority = "optional"
 depends = "$auto"
 maintainer-scripts = "contrib/debian"
+extended-description = "Command-line tool and Rust library for inspecting and configuring Logitech MX Master 4 mice over Logi Bolt or Bluetooth."
+changelog = "contrib/debian/changelog"
 assets = [
     ["target/release/mx4", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/mx4/README.md", "644"],

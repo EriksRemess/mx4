@@ -21,10 +21,7 @@ pub fn run(args: &[String]) -> Result<()> {
     match args {
         [] => run_loop(),
         [flag] if flag == "--install" => service::install(),
-        [flag] if flag == "--once" => {
-            apply_once_with_retry();
-            Ok(())
-        }
+        [flag] if flag == "--once" => apply_once_with_retry(),
         [flag] if flag == "--uninstall" => service::uninstall(),
         _ => Err(
             "try `mx4 daemon`, `mx4 daemon --install`, `mx4 daemon --once`, or `mx4 daemon --uninstall`"
@@ -54,7 +51,13 @@ fn run_loop() -> Result<()> {
                 !connected || should_reconcile(last_apply_attempt, last_apply_success);
 
             if should_apply {
-                let applied = apply_once_with_retry();
+                let applied = match apply_once_with_retry() {
+                    Ok(()) => true,
+                    Err(err) => {
+                        eprintln!("mx4 daemon: {err}");
+                        false
+                    }
+                };
                 let now = Instant::now();
                 last_apply_attempt = Some(now);
 
@@ -93,17 +96,11 @@ fn should_reconcile(
     retry_ready && reconcile_due
 }
 
-fn apply_once_with_retry() -> bool {
-    let config = match config::load() {
-        Ok(config) => config,
-        Err(err) => {
-            eprintln!("mx4 daemon: couldn't load config: {err}");
-            return false;
-        }
-    };
+fn apply_once_with_retry() -> Result<()> {
+    let config = config::load().map_err(|err| format!("couldn't load config: {err}"))?;
 
     if config.is_empty() {
-        return true;
+        return Ok(());
     }
 
     let mut last_errors = Vec::new();
@@ -114,7 +111,7 @@ fn apply_once_with_retry() -> bool {
         let errors = config::apply_best_effort(&config);
 
         if errors.is_empty() {
-            return true;
+            return Ok(());
         }
 
         last_errors = errors;
@@ -124,9 +121,5 @@ fn apply_once_with_retry() -> bool {
         }
     }
 
-    for error in last_errors {
-        eprintln!("mx4 daemon: {error}");
-    }
-
-    false
+    Err(last_errors.join("; ").into())
 }
