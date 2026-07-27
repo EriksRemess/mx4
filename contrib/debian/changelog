@@ -1,3 +1,9 @@
+mx4 (0.6.2-1) unstable; urgency=medium
+
+  * build(release): generate Debian changelog via pre-release hook
+
+ -- Eriks Remess <eriks@remess.lv>  Mon, 27 Jul 2026 09:14:06 +0300
+
 mx4 (0.6.1-1) unstable; urgency=medium
 
   * feat: harden CLI behavior and release packaging
