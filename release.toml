@@ -1,0 +1,5 @@
+pre-release-hook = [
+    "./scripts/generate-debian-changelog",
+    "{{version}}",
+    "contrib/debian/changelog",
+]

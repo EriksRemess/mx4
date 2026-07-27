@@ -2,37 +2,76 @@
 
 set -eu
 
-tag=${1:-}
+version=${1:-}
+output=${2:-}
+ref=${3:-HEAD}
 
-if [ -z "$tag" ] || [ "${tag#v}" = "$tag" ]; then
-    echo "usage: $0 v<version>" >&2
+if [ -z "$version" ]; then
+    echo "usage: $0 <version> [output] [tag]" >&2
     exit 1
 fi
 
-version=${tag#v}
-commit=$(git rev-parse --verify "$tag^{commit}")
-previous_tag=$(git describe --tags --match 'v*' --abbrev=0 "$commit^" 2>/dev/null || true)
-release_date=$(git for-each-ref --format='%(taggerdate:rfc2822)' "refs/tags/$tag")
+commit=$(git rev-parse --verify "$ref^{commit}")
 
-if [ -z "$release_date" ]; then
-    release_date=$(git show -s --format='%cD' "$commit")
-fi
-
-printf 'mx4 (%s-1) unstable; urgency=medium\n\n' "$version"
-
-if [ -n "$previous_tag" ]; then
-    entries=$(
-        git log --format='  * %s' "$previous_tag..$commit" \
-            --invert-grep --grep='^chore: Release mx4 version '
-    )
+if [ "$ref" = "HEAD" ]; then
+    previous_tag=$(git describe --tags --match 'v*' --abbrev=0 "$commit" 2>/dev/null || true)
+    release_date=$(date -R)
 else
-    entries=
+    previous_tag=$(git describe --tags --match 'v*' --abbrev=0 "$commit^" 2>/dev/null || true)
+    release_date=$(git for-each-ref --format='%(taggerdate:rfc2822)' "refs/tags/$ref")
+
+    if [ -z "$release_date" ]; then
+        release_date=$(git show -s --format='%cD' "$commit")
+    fi
 fi
 
-if [ -n "$entries" ]; then
-    printf '%s\n' "$entries"
-else
-    printf '  * Release version %s.\n' "$version"
+stanza() {
+    printf 'mx4 (%s-1) unstable; urgency=medium\n\n' "$version"
+
+    if [ -n "$previous_tag" ]; then
+        entries=$(
+            git log --format='  * %s' "$previous_tag..$commit" \
+                --invert-grep --grep='^chore: Release mx4 version '
+        )
+    else
+        entries=
+    fi
+
+    if [ -n "$entries" ]; then
+        printf '%s\n' "$entries"
+    else
+        printf '  * Release version %s.\n' "$version"
+    fi
+
+    printf '\n -- Eriks Remess <eriks@remess.lv>  %s\n' "$release_date"
+}
+
+if [ -z "$output" ] || [ "${DRY_RUN:-false}" = "true" ]; then
+    stanza
+    exit 0
 fi
 
-printf '\n -- Eriks Remess <eriks@remess.lv>  %s\n' "$release_date"
+temporary=$(mktemp)
+trap 'rm -f "$temporary"' EXIT HUP INT TERM
+
+stanza >"$temporary"
+
+if [ -f "$output" ]; then
+    printf '\n' >>"$temporary"
+    expected_header="mx4 ($version-1) unstable; urgency=medium"
+    current_header=$(sed -n '1p' "$output")
+
+    if [ "$current_header" = "$expected_header" ]; then
+        awk '
+            keep && started { print }
+            keep && !started && NF { started = 1; print }
+            /^ -- / { keep = 1 }
+        ' "$output" >>"$temporary"
+    else
+        cat "$output" >>"$temporary"
+    fi
+fi
+
+chmod 644 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT HUP INT TERM

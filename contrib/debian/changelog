@@ -1,3 +1,10 @@
+mx4 (0.6.1-1) unstable; urgency=medium
+
+  * feat: harden CLI behavior and release packaging
+  * docs(readme): add Debian package install flow and udev notes
+
+ -- Eriks Remess <eriks@remess.lv>  Mon, 27 Jul 2026 09:06:45 +0300
+
 mx4 (0.6.0-1) unstable; urgency=medium
 
   * feat(daemon): make reconnect daemon opt-in and add Debian release workflow
