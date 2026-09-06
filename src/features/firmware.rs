@@ -137,6 +137,7 @@ pub fn format_status(status: &FirmwareStatus, json: bool) -> String {
 }
 
 fn receiver_entity(dev: &HidDevice, entity_idx: u8) -> Result<Vec<u8>> {
+    let _lock = crate::transport_lock::acquire()?;
     let mut drain = [0u8; 64];
     while dev.read_timeout(&mut drain, 0)? != 0 {}
 

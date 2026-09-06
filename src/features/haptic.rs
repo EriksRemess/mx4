@@ -211,27 +211,45 @@ fn parse_effect(arg: &str) -> Result<u8> {
 }
 
 fn send_method(dev: &HidDevice, idx: u8, feature_idx: u8, method: u8, params: &[u8]) -> Result<()> {
+    let _lock = crate::transport_lock::acquire()?;
     let pkt = packet(idx, feature_idx, method, params);
     write_packet(dev, &pkt, "that haptic packet didn't fully send")
 }
 
 fn prompt() -> Result<u8> {
+    prompt_with(&mut io::stdin().lock(), &mut io::stdout().lock())
+}
+
+fn prompt_with(input: &mut impl io::BufRead, output: &mut impl Write) -> Result<u8> {
     loop {
-        print!("Enter a number from 0 to 14: ");
-        io::stdout().flush()?;
+        write!(output, "Enter a number from 0 to 14: ")?;
+        output.flush()?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            return Err("no haptic effect supplied before end of input".into());
+        }
 
-        match input.trim().parse() {
+        match line.trim().parse() {
             Ok(n @ 0..=14) => return Ok(n),
-            _ => println!("Pick a haptic effect from 0 to 14."),
+            _ => writeln!(output, "Pick a haptic effect from 0 to 14.")?,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prompt_handles_eof_and_invalid_input() {
+        let mut output = Vec::new();
+        assert!(super::prompt_with(&mut &b""[..], &mut output).is_err());
+        assert!(output.len() < 100);
+        assert!(super::prompt_with(&mut &b"invalid\n"[..], &mut output).is_err());
+        assert_eq!(
+            super::prompt_with(&mut &b"invalid\n3\n"[..], &mut output).unwrap(),
+            3
+        );
+    }
     use super::{
         HAPTIC_EFFECT_METHOD, HAPTIC_STRENGTH_METHOD, format_status, packet, parse_effect_arg,
         parse_effects, parse_status_reply, parse_strength,

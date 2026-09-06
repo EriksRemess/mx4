@@ -23,5 +23,5 @@ assets = [
     ["target/release/mx4", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/mx4/README.md", "644"],
     ["LICENSE", "usr/share/doc/mx4/copyright", "644"],
-    ["contrib/udev/99-mx4.rules", "usr/lib/udev/rules.d/99-mx4.rules", "644"],
+    ["contrib/udev/70-mx4.rules", "usr/lib/udev/rules.d/70-mx4.rules", "644"],
 ]

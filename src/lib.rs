@@ -5,5 +5,6 @@ pub mod daemon;
 pub mod device;
 pub mod features;
 pub mod service;
+mod transport_lock;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

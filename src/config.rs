@@ -5,7 +5,9 @@
 
 use std::env;
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Result;
 use crate::features;
@@ -90,20 +92,107 @@ pub fn load() -> Result<SavedConfig> {
 }
 
 pub fn save(config: &SavedConfig) -> Result<()> {
-    let path = config_path()?;
+    let path = config_write_path(&config_path()?)?;
+    let _lock = lock_config(&path)?;
+    save_to_path(&path, config)
+}
 
+fn lock_config(path: &Path) -> Result<fs::File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-
-    fs::write(path, config.to_toml())?;
-    Ok(())
+    // Keep a separate, persistent lock inode: replacing the config must not replace its lock.
+    // Closing the handle releases the lock, including on errors or process termination.
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 pub fn update(mutator: impl FnOnce(&mut SavedConfig)) -> Result<()> {
-    let mut config = load()?;
+    update_at_path(&config_path()?, mutator)
+}
+
+fn update_at_path(path: &Path, mutator: impl FnOnce(&mut SavedConfig)) -> Result<()> {
+    let path = config_write_path(path)?;
+    let _lock = lock_config(&path)?;
+    let mut config = load_from_path(&path)?;
     mutator(&mut config);
-    save(&config)
+    save_to_path(&path, &config)
+}
+
+fn config_write_path(path: &Path) -> Result<PathBuf> {
+    let mut path = path.to_path_buf();
+    // Resolve before both locking and writing, so aliases share a lock and atomic replacement
+    // updates the target without removing the user's symlink. Also support dangling relative links.
+    for _ in 0..40 {
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = fs::read_link(&path)?;
+                path = if target.is_absolute() {
+                    target
+                } else {
+                    path.parent().unwrap_or(Path::new(".")).join(target)
+                };
+            }
+            Ok(_) => return Ok(fs::canonicalize(path)?),
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let parent = path
+                    .parent()
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                fs::create_dir_all(parent)?;
+                let filename = path.file_name().ok_or("config path must name a file")?;
+                return Ok(fs::canonicalize(parent)?.join(filename));
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Err("too many symlinks in the config path".into())
+}
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct TemporaryConfig(PathBuf);
+
+impl Drop for TemporaryConfig {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn save_to_path(path: &Path, config: &SavedConfig) -> Result<()> {
+    let (temporary, mut file) = loop {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = path.with_extension(format!("{}.{}.tmp", std::process::id(), sequence));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temporary) {
+            Ok(file) => break (TemporaryConfig(temporary), file),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        }
+    };
+    if let Ok(metadata) = fs::metadata(path) {
+        file.set_permissions(metadata.permissions())?;
+    }
+    file.write_all(config.to_toml().as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    // Same-directory rename makes readers see either the old or the complete new configuration.
+    fs::rename(&temporary.0, path)?;
+    Ok(())
 }
 
 pub fn apply_saved_settings() -> Result<()> {
@@ -340,6 +429,131 @@ fn on_off(value: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    fn temporary_path() -> std::path::PathBuf {
+        let sequence = super::TEMP_SEQUENCE.fetch_add(1, super::Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!("mx4-config-test-{}-{sequence}", std::process::id()))
+            .join("config.toml")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn updates_symlink_targets_without_replacing_links() {
+        use std::{fs, os::unix::fs::symlink};
+        for relative in [false, true] {
+            let path = temporary_path();
+            let root = path.parent().unwrap();
+            let target = root.join("dotfiles/settings.lock");
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(&target, "dpi = 2000\n").unwrap();
+            let intermediate = root.join("linked-config");
+            symlink(
+                if relative {
+                    std::path::Path::new("dotfiles/settings.lock")
+                } else {
+                    &target
+                },
+                &intermediate,
+            )
+            .unwrap();
+            symlink("linked-config", &path).unwrap();
+
+            super::update_at_path(&path, |config| config.dpi = Some(2500)).unwrap();
+
+            assert!(path.is_symlink());
+            assert!(intermediate.is_symlink());
+            assert_eq!(super::load_from_path(&target).unwrap().dpi, Some(2500));
+            assert_eq!(
+                super::config_write_path(&path).unwrap(),
+                super::config_write_path(&target).unwrap()
+            );
+            assert!(target.with_file_name("settings.lock.lock").is_file());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creates_dangling_symlink_target_and_rejects_cycles() {
+        use std::{fs, os::unix::fs::symlink};
+        let path = temporary_path();
+        let root = path.parent().unwrap();
+        fs::create_dir_all(root).unwrap();
+        symlink("dotfiles/config.toml", &path).unwrap();
+        super::update_at_path(&path, |config| config.dpi = Some(2500)).unwrap();
+        assert!(path.is_symlink());
+        assert_eq!(
+            super::load_from_path(&root.join("dotfiles/config.toml"))
+                .unwrap()
+                .dpi,
+            Some(2500)
+        );
+        fs::remove_file(&path).unwrap();
+        symlink("config.toml", &path).unwrap();
+        assert!(super::update_at_path(&path, |_| panic!("must reject a symlink cycle")).is_err());
+        assert!(path.is_symlink());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_updates_preserve_every_change() {
+        let path = temporary_path();
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let path = &path;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    super::update_at_path(path, |config| {
+                        let previous = config.dpi.unwrap_or(200);
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        config.dpi = Some(previous + 1);
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        assert_eq!(super::load_from_path(&path).unwrap().dpi, Some(208));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn readers_never_see_a_partial_save() {
+        let path = temporary_path();
+        super::update_at_path(&path, |config| config.dpi = Some(200)).unwrap();
+        let finished = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                for value in 201..=250 {
+                    super::update_at_path(&path, |config| config.dpi = Some(value)).unwrap();
+                }
+                finished.store(true, super::Ordering::Release);
+            });
+            while !finished.load(super::Ordering::Acquire) {
+                let dpi = super::load_from_path(&path).unwrap().dpi.unwrap();
+                assert!((200..=250).contains(&dpi));
+            }
+        });
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            2
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn invalid_config_is_not_overwritten() {
+        let path = temporary_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "dpi = invalid\n").unwrap();
+        assert!(
+            super::update_at_path(&path, |_| panic!("must not mutate invalid config")).is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "dpi = invalid\n");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     use super::{SavedConfig, WheelRatchet, parse};
 
     #[test]

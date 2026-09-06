@@ -1,7 +1,7 @@
 //! Easy-Switch host selection through HID++ feature `0x1814`.
 
 use crate::Result;
-use crate::device::{feature, open, req};
+use crate::device::{feature, open, send};
 
 const CHANGE_HOST: u16 = 0x1814;
 
@@ -21,10 +21,13 @@ pub fn parse(arg: &str) -> Result<u8> {
 }
 
 pub fn set_value(dev: &hidapi::HidDevice, idx: u8, host: u8) -> Result<()> {
+    if !(1..=3).contains(&host) {
+        return Err("pick a host from 1 to 3".into());
+    }
     let feature = feature(dev, idx, CHANGE_HOST)?;
     // The CLI is one-based for humans; the HID++ feature numbers its host slots from zero.
-    req(dev, idx, feature, 0x01, &[host - 1])?;
-    Ok(())
+    // Switching disconnects this host, so there is no reply to wait for.
+    send(dev, idx, feature, 0x01, &[host - 1])
 }
 
 #[cfg(test)]

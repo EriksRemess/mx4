@@ -44,21 +44,39 @@ fn install_linux_service() -> Result<()> {
     let service_path = service_dir.join(SERVICE_NAME);
     let executable = env::current_exe()?;
     let unit = linux_unit(&executable);
-    let changed = write_if_changed(&service_path, &unit)?;
-
-    if changed {
-        run("systemctl", ["--user", "daemon-reload"])?;
-    }
-
-    run("systemctl", ["--user", "enable", "--now", SERVICE_NAME])?;
+    write_if_changed(&service_path, &unit)?;
+    // An explicit install also activates upgrades at the same executable path and retries a
+    // previous failed reload. Enabling an already-active service alone would retain its old process.
+    run("systemctl", ["--user", "daemon-reload"])?;
+    run("systemctl", ["--user", "enable", SERVICE_NAME])?;
+    run("systemctl", ["--user", "restart", SERVICE_NAME])?;
     Ok(())
 }
 
 fn uninstall_linux_service() -> Result<()> {
     let service_path = linux_service_dir()?.join(SERVICE_NAME);
 
-    // A missing or already-stopped service is a successful uninstall.
-    let _ = run("systemctl", ["--user", "disable", "--now", SERVICE_NAME]);
+    // Ignore failure only when the manager confirms there is no service left to stop. Preserve the
+    // unit file on bus, permission, or stop failures so the user can retry the uninstall.
+    if let Err(err) = run("systemctl", ["--user", "disable", "--now", SERVICE_NAME]) {
+        let state = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                "--property=LoadState",
+                "--property=ActiveState",
+                SERVICE_NAME,
+            ])
+            .output()?;
+        let state_text = String::from_utf8_lossy(&state.stdout);
+        if !state_text.lines().any(|line| line == "LoadState=not-found")
+            || !state_text
+                .lines()
+                .any(|line| line == "ActiveState=inactive")
+        {
+            return Err(err);
+        }
+    }
     if remove_if_exists(&service_path)? {
         run("systemctl", ["--user", "daemon-reload"])?;
     }
@@ -102,7 +120,7 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<bool> {
         fs::create_dir_all(parent)?;
     }
 
-    // Avoid touching timestamps and restarting an already-correct daemon on every CLI invocation.
+    // Avoid rewriting identical generated files.
     match fs::read_to_string(path) {
         Ok(existing) if existing == contents => Ok(false),
         Ok(_) | Err(_) => {

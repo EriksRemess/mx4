@@ -67,6 +67,17 @@ cargo build --release
 ./target/release/mx4 --help
 ```
 
+## Tests
+
+```bash
+cargo test
+cargo test hardware -- --ignored --nocapture
+```
+
+Normal tests require no mouse. The opt-in hardware tests require an awake MX Master 4 connected over Bolt or Bluetooth, HID access, and a writable configuration directory. They read all status features and firmware, check repeated concurrent DPI/haptic queries from separate CLI processes, and send haptic effect 14 through the CLI. Leave settings unchanged while they run; the daemon can remain active.
+
+Hardware tests fail if the mouse is unavailable or a command fails. The playback test checks that the effect command sends successfully and leaves the haptic configuration unchanged. Playback has no acknowledgement, so feel the mouse during the test to confirm physical vibration. Tests use the current haptic strength without changing settings.
+
 ## Library
 
 This crate can also be used as a Rust library:
@@ -144,6 +155,8 @@ mx4 daemon --install
 
 This creates a user `systemd` service on Linux or a user `launchd` agent on macOS. It watches for reconnects and reapplies saved settings. No `sudo` is needed.
 
+The CLI and daemon coordinate device access through a lock file in the configuration directory. Both must use the same configuration directory, which must be writable even for status queries.
+
 Other daemon modes:
 
 ```bash
@@ -157,7 +170,7 @@ mx4 daemon --uninstall # stop and remove the background service
 The Debian package installs and reloads the udev access rule automatically. For Cargo or source installations, if a targeted command such as `mx4 status dpi` reports a `/dev/hidraw... Permission denied` error, install the rule once and reconnect the mouse or Logi Bolt receiver:
 
 ```bash
-sudo install -Dm644 contrib/udev/99-mx4.rules /etc/udev/rules.d/99-mx4.rules
+sudo install -Dm644 contrib/udev/70-mx4.rules /etc/udev/rules.d/70-mx4.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
@@ -165,8 +178,8 @@ sudo udevadm trigger
 The source checkout already contains that rule. A Cargo installation only installs the binary, so download the rule first if you do not have the source tree:
 
 ```bash
-curl -fLO https://raw.githubusercontent.com/EriksRemess/mx4/main/contrib/udev/99-mx4.rules
-sudo install -Dm644 99-mx4.rules /etc/udev/rules.d/99-mx4.rules
+curl -fLO https://raw.githubusercontent.com/EriksRemess/mx4/main/contrib/udev/70-mx4.rules
+sudo install -Dm644 70-mx4.rules /etc/udev/rules.d/70-mx4.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```

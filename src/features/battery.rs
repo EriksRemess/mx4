@@ -44,17 +44,22 @@ pub fn json_status() -> Result<String> {
 pub fn read_status() -> Result<BatteryStatus> {
     let (dev, idx) = open()?;
     // Prefer the newer unified feature, but retain the older battery feature for firmware variants
-    // that do not expose it. Their status methods and charging-state byte offsets differ.
+    // that do not expose it. Their status methods differ, but both put status at payload byte 2.
     let (feature, unified) = match feature(&dev, idx, UNIFIED_BATTERY) {
         Ok(feature) => (feature, true),
         Err(_) => (feature(&dev, idx, BATTERY)?, false),
     };
     let reply = req(&dev, idx, feature, if unified { 1 } else { 0 }, &[])?;
+    parse_status_reply(&reply, unified)
+}
+
+fn parse_status_reply(reply: &[u8], unified: bool) -> Result<BatteryStatus> {
     let pct = *reply.get(4).ok_or("the battery reply was too short")?;
+    let state = *reply.get(6).ok_or("the battery reply was too short")?;
     let charging = if unified {
-        matches!(reply.get(7).copied(), Some(1..=3))
+        matches!(state, 1..=3)
     } else {
-        matches!(reply.get(6).copied(), Some(1..=4))
+        matches!(state, 1..=4)
     };
 
     Ok(BatteryStatus { pct, charging })
@@ -74,7 +79,27 @@ pub fn format_status(status: &BatteryStatus, json: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BatteryStatus, format_status};
+    use super::{BatteryStatus, format_status, parse_status_reply};
+
+    #[test]
+    fn charging_uses_status_instead_of_reserved_byte() {
+        assert!(
+            parse_status_reply(&[0x11, 0, 1, 0x11, 50, 4, 1, 0], true)
+                .unwrap()
+                .charging
+        );
+        assert!(
+            !parse_status_reply(&[0x11, 0, 1, 0x11, 50, 4, 0, 1], true)
+                .unwrap()
+                .charging
+        );
+        assert!(
+            parse_status_reply(&[0x10, 1, 1, 1, 50, 20, 1], false)
+                .unwrap()
+                .charging
+        );
+        assert!(parse_status_reply(&[0x10, 1, 1, 1, 50, 20], false).is_err());
+    }
 
     #[test]
     fn formats_battery_json() {
