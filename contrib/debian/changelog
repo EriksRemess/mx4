@@ -1,3 +1,9 @@
+mx4 (0.6.3-1) unstable; urgency=medium
+
+  * fix: harden HID++ access and configuration updates
+
+ -- Eriks Remess <eriks@remess.lv>  Sun, 06 Sep 2026 22:41:36 +0300
+
 mx4 (0.6.2-1) unstable; urgency=medium
 
   * build(release): generate Debian changelog via pre-release hook
