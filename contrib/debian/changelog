@@ -1,3 +1,9 @@
+mx4 (0.6.4-1) unstable; urgency=medium
+
+  * feat: serialize settings updates and daemon reconciliation
+
+ -- Eriks Remess <eriks@remess.lv>  Fri, 23 Oct 2026 17:00:21 +0300
+
 mx4 (0.6.3-1) unstable; urgency=medium
 
   * fix: harden HID++ access and configuration updates
