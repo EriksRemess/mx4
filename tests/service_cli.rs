@@ -27,7 +27,12 @@ impl ServiceTest {
 printf '%s\n' "$*" >> "$MX4_TEST_LOG"
 case "$2" in
     disable) exit "${MX4_TEST_DISABLE_EXIT:-0}" ;;
-    show) printf '%s\n' "$MX4_TEST_STATE"; exit "${MX4_TEST_SHOW_EXIT:-0}" ;;
+    show)
+        if [ "$3" = "--property=FragmentPath" ]; then
+            printf '%s\n' "$MX4_TEST_FRAGMENT"
+            exit "${MX4_TEST_DISCOVERY_EXIT:-0}"
+        fi
+        printf '%s\n' "$MX4_TEST_STATE"; exit "${MX4_TEST_SHOW_EXIT:-0}" ;;
     restart) exit "${MX4_TEST_RESTART_EXIT:-0}" ;;
 esac
 "#,
@@ -87,8 +92,17 @@ fn install_restarts_after_updating_unit_and_when_binary_path_is_unchanged() {
     );
     assert_eq!(
         test.calls(),
-        "--user daemon-reload\n--user enable mx4.service\n--user restart mx4.service\n".repeat(2)
+        format!(
+            "--user show --property=FragmentPath --value mx4.service\n--user daemon-reload\n--user enable {}\n--user restart mx4.service\n",
+            test.unit_path().display()
+        )
+        .repeat(2)
     );
+    let unit = fs::read_to_string(test.unit_path()).unwrap();
+    assert!(unit.contains(&format!(
+        "Environment=\"XDG_CONFIG_HOME={}\"",
+        test.root.join("config").display()
+    )));
 }
 
 #[test]
@@ -103,11 +117,58 @@ fn install_reports_restart_failure() {
 }
 
 #[test]
+fn changed_config_home_reuses_and_removes_the_installed_unit() {
+    let test = ServiceTest::new();
+    test.seed_unit();
+    let new_config_home = test.root.join("new config");
+    let unit_path = test.unit_path();
+    let variables = [
+        ("MX4_TEST_FRAGMENT", unit_path.to_str().unwrap()),
+        ("XDG_CONFIG_HOME", new_config_home.to_str().unwrap()),
+    ];
+    assert!(test.run("--install", &variables).status.success());
+    let unit = fs::read_to_string(&unit_path).unwrap();
+    assert!(unit.contains(&format!(
+        "Environment=\"XDG_CONFIG_HOME={}\"",
+        new_config_home.display()
+    )));
+    assert!(!new_config_home.join("systemd/user/mx4.service").exists());
+    assert!(
+        test.calls()
+            .contains(&format!("--user enable {}\n", unit_path.display()))
+    );
+    assert!(test.run("--uninstall", &variables).status.success());
+    assert!(!unit_path.exists());
+}
+
+#[test]
+fn service_discovery_failure_and_unexpected_paths_stop_before_mutation() {
+    for variables in [
+        vec![("MX4_TEST_DISCOVERY_EXIT", "1")],
+        vec![("MX4_TEST_FRAGMENT", "/dev/null")],
+        vec![("MX4_TEST_FRAGMENT", "relative/mx4.service")],
+    ] {
+        for option in ["--install", "--uninstall"] {
+            let test = ServiceTest::new();
+            test.seed_unit();
+            assert!(!test.run(option, &variables).status.success());
+            assert!(
+                fs::read_to_string(test.unit_path())
+                    .unwrap()
+                    .contains("/old/mx4")
+            );
+            assert_eq!(test.calls().lines().count(), 1);
+        }
+    }
+}
+
+#[test]
 fn uninstall_preserves_unit_on_stop_or_bus_failure() {
     for state in [
         "LoadState=loaded\nActiveState=active",
         "LoadState=not-found\nActiveState=active",
         "",
+        "LoadState=not-found\nActiveState=inactive",
     ] {
         let test = ServiceTest::new();
         test.seed_unit();

@@ -1,12 +1,15 @@
 //! Adjustable sensor resolution through HID++ feature `0x2201`.
 
+use hidapi::HidDevice;
+
 use crate::Result;
-use crate::device::{feature, open, req};
+use crate::device;
 
 const ADJUSTABLE_DPI: u16 = 0x2201;
 const MIN_DPI: u32 = 200;
 const MAX_DPI: u32 = 8000;
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -19,6 +22,7 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Print text status, or an unavailable message if reading the device fails.
 pub fn print_best_effort() {
     match read_status() {
         Ok(dpi) => println!("{}", format_status(dpi, false)),
@@ -26,11 +30,13 @@ pub fn print_best_effort() {
     }
 }
 
+/// Parse and apply a DPI value from 200 through 8000 without saving it to configuration.
 pub fn set(arg: &str) -> Result<()> {
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
     set_value(&dev, idx, parse(arg)?)
 }
 
+/// Parse a decimal DPI value, rejecting values outside 200 through 8000.
 pub fn parse(arg: &str) -> Result<u32> {
     let dpi: u32 = arg.trim().parse()?;
 
@@ -41,20 +47,27 @@ pub fn parse(arg: &str) -> Result<u32> {
     Ok(dpi)
 }
 
+/// Read the current sensor resolution in dots per inch.
 pub fn read_status() -> Result<u32> {
-    let (dev, idx) = open()?;
-    let feature = feature(&dev, idx, ADJUSTABLE_DPI)?;
-    let reply = req(&dev, idx, feature, 0x02, &[])?;
+    let (dev, idx) = device::open()?;
+    let feature = device::feature(&dev, idx, ADJUSTABLE_DPI)?;
+    let reply = device::req(&dev, idx, feature, 0x02, &[])?;
     parse_status_reply(&reply)
 }
 
-pub fn set_value(dev: &hidapi::HidDevice, idx: u8, dpi: u32) -> Result<()> {
-    let feature = feature(dev, idx, ADJUSTABLE_DPI)?;
+/// Write DPI using an existing device handle and device index.
+///
+/// The caller must validate the value, for example with [`parse`]. This low-level setter does not
+/// check the supported range and encodes only the low 24 bits. It does not persist the setting.
+pub fn set_value(dev: &HidDevice, idx: u8, dpi: u32) -> Result<()> {
+    let feature = device::feature(dev, idx, ADJUSTABLE_DPI)?;
     let payload = payload(dpi);
-    req(dev, idx, feature, 0x03, &payload)?;
+    device::req(dev, idx, feature, 0x03, &payload)?;
     Ok(())
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(dpi: u32, json: bool) -> String {
     if json {
         format!(r#"{{"value":{dpi}}}"#)
@@ -63,10 +76,12 @@ pub fn format_status(dpi: u32, json: bool) -> String {
     }
 }
 
+/// Read status and return JSON without printing it.
 pub fn json_status() -> Result<String> {
     Ok(format_status(read_status()?, true))
 }
 
+/// Decode DPI from a complete HID++ report, returning an error if it is too short.
 pub fn parse_status_reply(reply: &[u8]) -> Result<u32> {
     // Logitech encodes DPI as an unsigned 24-bit big-endian value in the response payload.
     let value = [
@@ -79,6 +94,8 @@ pub fn parse_status_reply(reply: &[u8]) -> Result<u32> {
     Ok(u32::from_be_bytes(value))
 }
 
+/// Encode the low 24 bits of `dpi` as a request payload without range validation.
+#[must_use]
 pub fn payload(dpi: u32) -> [u8; 3] {
     // The feature accepts the same 24-bit representation, so discard the high byte of the u32.
     let bytes = dpi.to_be_bytes();

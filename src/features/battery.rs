@@ -1,16 +1,19 @@
 //! Battery status with support for both generations exposed by Logitech devices.
 
 use crate::Result;
-use crate::device::{feature, open, req};
+use crate::device;
 
 const BATTERY: u16 = 0x1000;
 const UNIFIED_BATTERY: u16 = 0x1004;
 
+/// Battery level and charging state decoded from a device report.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BatteryStatus {
     pub pct: u8,
     pub charging: bool,
 }
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -23,6 +26,7 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Print text status, or an unavailable message if reading the device fails.
 pub fn print_best_effort() {
     match read_status() {
         Ok(status) => println!("{}", format_status(&status, false)),
@@ -30,6 +34,8 @@ pub fn print_best_effort() {
     }
 }
 
+/// Serialize an existing battery status as JSON without device I/O.
+#[must_use]
 pub fn json_value(status: &BatteryStatus) -> String {
     format!(
         r#"{{"level":{},"charging":{}}}"#,
@@ -37,19 +43,21 @@ pub fn json_value(status: &BatteryStatus) -> String {
     )
 }
 
+/// Read status and return JSON without printing it.
 pub fn json_status() -> Result<String> {
     Ok(json_value(&read_status()?))
 }
 
+/// Read battery status, trying the older battery feature if unified-feature lookup fails.
 pub fn read_status() -> Result<BatteryStatus> {
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
     // Prefer the newer unified feature, but retain the older battery feature for firmware variants
     // that do not expose it. Their status methods differ, but both put status at payload byte 2.
-    let (feature, unified) = match feature(&dev, idx, UNIFIED_BATTERY) {
+    let (feature, unified) = match device::feature(&dev, idx, UNIFIED_BATTERY) {
         Ok(feature) => (feature, true),
-        Err(_) => (feature(&dev, idx, BATTERY)?, false),
+        Err(_) => (device::feature(&dev, idx, BATTERY)?, false),
     };
-    let reply = req(&dev, idx, feature, if unified { 1 } else { 0 }, &[])?;
+    let reply = device::req(&dev, idx, feature, if unified { 1 } else { 0 }, &[])?;
     parse_status_reply(&reply, unified)
 }
 
@@ -65,6 +73,8 @@ fn parse_status_reply(reply: &[u8], unified: bool) -> Result<BatteryStatus> {
     Ok(BatteryStatus { pct, charging })
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(status: &BatteryStatus, json: bool) -> String {
     if json {
         json_value(status)

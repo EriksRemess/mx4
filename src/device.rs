@@ -16,6 +16,7 @@ const BOLT_HIDPP_PAGE: u16 = 0xff00;
 const BT_HIDPP_PAGE: u16 = 0xff43;
 const BT_DIRECT_INDEX: u8 = 0x00;
 
+/// HID++ report ID for a seven-byte short report.
 pub const SHORT: u8 = 0x10;
 const LONG: u8 = 0x11;
 // Older mx4 daemons use ID 1 and do not take our transport lock. Keep their replies separate
@@ -24,6 +25,10 @@ const SW_ID: u8 = 0x02;
 const HIDPP_ERROR: u8 = 0x8f;
 const HIDPP20_ERROR: u8 = 0xff;
 
+/// Open an MX Master 4, preferring Bluetooth over a mouse paired with a Bolt receiver.
+///
+/// Returns the HID handle and its device index: zero for direct Bluetooth, or the mouse's receiver
+/// slot for Bolt. Bolt discovery sends requests and therefore also requires the transport lock.
 pub fn open() -> Result<(HidDevice, u8)> {
     let api = HidApi::new()?;
     if let Some(info) = api.device_list().find(|d| is_bluetooth_hidpp(d)) {
@@ -55,6 +60,9 @@ pub fn open() -> Result<(HidDevice, u8)> {
     }))
 }
 
+/// Open the first matching Bolt receiver independently of the mouse's active transport.
+///
+/// Returns `None` when no receiver is enumerated, or an error when opening it fails.
 pub fn open_bolt_receiver() -> Result<Option<HidDevice>> {
     let api = HidApi::new()?;
     // `open()` deliberately prefers a directly connected Bluetooth mouse. Firmware status also
@@ -66,6 +74,9 @@ pub fn open_bolt_receiver() -> Result<Option<HidDevice>> {
     Ok(Some(info.open_device(&api)?))
 }
 
+/// Resolve a stable HID++ feature ID to the runtime index assigned by this device.
+///
+/// Returns an error if the feature is unavailable or its lookup request fails.
 pub fn feature(dev: &HidDevice, idx: u8, feature_id: u16) -> Result<u8> {
     // HID++ 2.0 feature IDs are stable, but the one-byte runtime index is assigned by each device.
     // The root feature at index zero resolves that mapping.
@@ -81,6 +92,19 @@ pub fn feature(dev: &HidDevice, idx: u8, feature_id: u16) -> Result<u8> {
     Ok(feature)
 }
 
+/// Send a feature request and return its matching report, including the HID++ header.
+///
+/// `idx` is the device index from [`open`], `feature` is a runtime feature index, and `function`
+/// must fit in four bits. At most three parameter bytes are accepted.
+///
+/// Acquires a blocking per-user file lock, discards pending input, then waits for a matching reply.
+/// The reply loop makes at most 100 reads with a 10 ms timeout each; lock acquisition and input
+/// draining have no fixed deadline. All cooperating clients must use the same configuration
+/// directory. This transport lock covers one exchange; wheel setters additionally hold a separate
+/// lock across their entire read-modify-write sequence.
+///
+/// Returns an error for invalid arguments, lock or HID failures, protocol rejection, or no matching
+/// reply. This call consumes notifications encountered while draining or waiting.
 pub fn req(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -> Result<Vec<u8>> {
     let _lock = crate::transport_lock::acquire()?;
     // Remove delayed notifications or replies from an earlier request before matching a new one.
@@ -120,6 +144,9 @@ pub fn req(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -
 }
 
 /// Send a short feature request without waiting for a reply, for operations that disconnect.
+///
+/// Uses the same argument limits and transport lock as [`req`]. Success confirms the write only,
+/// not that the device performed the operation. Bluetooth requests are padded to long reports.
 pub fn send(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -> Result<()> {
     let _lock = crate::transport_lock::acquire()?;
     send_unlocked(dev, idx, feature, function, params)
@@ -139,6 +166,11 @@ fn request_packet(idx: u8, feature: u8, function: u8, params: &[u8]) -> Result<[
     Ok(pkt)
 }
 
+/// Write a raw HID++ packet, converting it to a long report for direct Bluetooth.
+///
+/// This low-level helper neither acquires the transport lock nor waits for a reply. Prefer [`req`]
+/// or [`send`] for coordinated feature requests. On Bluetooth, at most 20 bytes are copied and the
+/// report ID is replaced; packets are otherwise passed through. A short write reports `err`.
 pub fn write_packet(dev: &HidDevice, pkt: &[u8], err: &'static str) -> Result<()> {
     let pkt = wire_packet(report_id(dev), pkt);
 

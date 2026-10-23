@@ -6,26 +6,32 @@ use std::thread;
 use std::time::Duration;
 
 use crate::Result;
-use crate::device::{SHORT, feature, open, req, write_packet};
+use crate::device;
 
 const HAPTIC: u16 = 0x19b0;
 const HAPTIC_SW_ID: u8 = 0x0e;
 const HAPTIC_EFFECT_METHOD: u8 = 0x04;
 const HAPTIC_STRENGTH_METHOD: u8 = 0x02;
 
+/// Haptic enable state, effective level, and whether the device reports discrete levels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HapticStatus {
     pub enabled: bool,
     pub level: u8,
     pub discrete_levels: bool,
 }
 
+/// Play effect numbers or ranges in order, pausing one second between effects.
+///
+/// With no arguments, prompts on standard input and output. Success confirms packet writes, not
+/// physical vibration. Playback does not change saved settings.
 pub fn play(args: &[String]) -> Result<()> {
     let effects = if args.is_empty() {
         vec![prompt()?]
     } else {
         parse_effects(args)?
     };
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
 
     // Leave enough time for each physical effect to finish before triggering the next one.
     for (i, effect) in effects.iter().copied().enumerate() {
@@ -39,6 +45,7 @@ pub fn play(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -51,6 +58,7 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Print text status, or an unavailable message if reading the device fails.
 pub fn print_best_effort() {
     match read_status() {
         Ok(status) => println!("{}", format_status(&status, false)),
@@ -58,11 +66,13 @@ pub fn print_best_effort() {
     }
 }
 
+/// Parse and apply a strength or preset without saving it to configuration.
 pub fn set_strength_arg(arg: &str) -> Result<()> {
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
     set_strength(&dev, idx, parse_strength(arg)?)
 }
 
+/// Expand effect arguments in order, preserving duplicates and each range's direction.
 pub fn parse_effects(args: &[String]) -> Result<Vec<u8>> {
     let mut effects = Vec::new();
 
@@ -73,6 +83,7 @@ pub fn parse_effects(args: &[String]) -> Result<Vec<u8>> {
     Ok(effects)
 }
 
+/// Parse an effect from 0 through 14 or an inclusive range such as `1..3` or `{3..1}`.
 pub fn parse_effect_arg(arg: &str) -> Result<Vec<u8>> {
     if let Some((start, end)) = parse_range(arg)? {
         let effects = if start <= end {
@@ -86,6 +97,7 @@ pub fn parse_effect_arg(arg: &str) -> Result<Vec<u8>> {
     Ok(vec![parse_effect(arg)?])
 }
 
+/// Parse a strength from 0 through 100 or the presets `off`, `subtle`, `low`, `medium`, `high`.
 pub fn parse_strength(arg: &str) -> Result<u8> {
     let strength = match arg.trim() {
         "off" => 0,
@@ -103,15 +115,20 @@ pub fn parse_strength(arg: &str) -> Result<u8> {
     Ok(strength)
 }
 
+/// Read haptic settings, reporting a level of zero when haptics are disabled.
 pub fn read_status() -> Result<HapticStatus> {
-    let (dev, idx) = open()?;
-    let feature_idx = feature(&dev, idx, HAPTIC)?;
-    let reply = req(&dev, idx, feature_idx, 0x01, &[])?;
+    let (dev, idx) = device::open()?;
+    let feature_idx = device::feature(&dev, idx, HAPTIC)?;
+    let reply = device::req(&dev, idx, feature_idx, 0x01, &[])?;
     parse_status_reply(&reply)
 }
 
+/// Apply haptic strength using an existing device handle and device index.
+///
+/// Zero disables haptics. The caller must validate the 0 through 100 range, for example with
+/// [`parse_strength`]; this low-level setter does not validate it or persist the setting.
 pub fn set_strength(dev: &HidDevice, idx: u8, strength: u8) -> Result<()> {
-    let feature_idx = feature(dev, idx, HAPTIC)?;
+    let feature_idx = device::feature(dev, idx, HAPTIC)?;
     // The first byte is an enable flag. Disabled mode still carries a placeholder level, while an
     // enabled request carries the caller's actual strength.
     let params = if strength == 0 {
@@ -120,15 +137,22 @@ pub fn set_strength(dev: &HidDevice, idx: u8, strength: u8) -> Result<()> {
         [0x01, strength]
     };
 
-    req(dev, idx, feature_idx, HAPTIC_STRENGTH_METHOD, &params)?;
+    device::req(dev, idx, feature_idx, HAPTIC_STRENGTH_METHOD, &params)?;
     Ok(())
 }
 
+/// Send an effect using an existing device handle and device index, without awaiting a reply.
+///
+/// The caller must validate the effect number (0 through 14), for example with [`parse_effect_arg`].
+/// Success confirms the packet write only; it does not confirm physical vibration.
 pub fn send_haptic(dev: &HidDevice, idx: u8, effect: u8) -> Result<()> {
-    let feature_idx = feature(dev, idx, HAPTIC)?;
+    let feature_idx = device::feature(dev, idx, HAPTIC)?;
     send_method(dev, idx, feature_idx, HAPTIC_EFFECT_METHOD, &[effect])
 }
 
+/// Decode a complete HID++ status report, returning an error if it is too short.
+///
+/// Disabled haptics are normalized to level zero regardless of the reported placeholder level.
 pub fn parse_status_reply(reply: &[u8]) -> Result<HapticStatus> {
     let enabled = reply
         .get(4)
@@ -146,6 +170,8 @@ pub fn parse_status_reply(reply: &[u8]) -> Result<HapticStatus> {
     })
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(status: &HapticStatus, json: bool) -> String {
     if json {
         format!(
@@ -167,15 +193,21 @@ pub fn format_status(status: &HapticStatus, json: bool) -> String {
     }
 }
 
+/// Read status and return JSON without printing it.
 pub fn json_status() -> Result<String> {
     Ok(format_status(&read_status()?, true))
 }
 
+/// Build a short haptic report with the playback software ID, without device I/O.
+///
+/// Copies at most three parameter bytes and uses the low four bits of `method`. This low-level
+/// helper truncates excess data rather than validating it.
+#[must_use]
 pub fn packet(idx: u8, feature_idx: u8, method: u8, params: &[u8]) -> [u8; 7] {
     // Effect playback is fire-and-forget, so build the packet with a dedicated software ID and send
     // it directly instead of waiting for the generic request/reply matcher.
     let mut pkt = [0u8; 7];
-    pkt[0] = SHORT;
+    pkt[0] = device::SHORT;
     pkt[1] = idx;
     pkt[2] = feature_idx;
     pkt[3] = (method << 4) | HAPTIC_SW_ID;
@@ -213,7 +245,7 @@ fn parse_effect(arg: &str) -> Result<u8> {
 fn send_method(dev: &HidDevice, idx: u8, feature_idx: u8, method: u8, params: &[u8]) -> Result<()> {
     let _lock = crate::transport_lock::acquire()?;
     let pkt = packet(idx, feature_idx, method, params);
-    write_packet(dev, &pkt, "that haptic packet didn't fully send")
+    device::write_packet(dev, &pkt, "that haptic packet didn't fully send")
 }
 
 fn prompt() -> Result<u8> {

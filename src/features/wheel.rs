@@ -3,8 +3,10 @@
 //! Logitech exposes these as three separate HID++ features. Setters use read-modify-write requests
 //! where flags share a payload so changing one option preserves the others.
 
+use hidapi::HidDevice;
+
 use crate::Result;
-use crate::device::{feature, open, req};
+use crate::device;
 
 const SMART_SHIFT_ENHANCED: u16 = 0x2111;
 const HIRES_WHEEL: u16 = 0x2121;
@@ -18,23 +20,32 @@ const THUMB_INVERT_MASK: [u8; 2] = [0x00, 0x01];
 const WHEEL_RATCHET_FREE: u8 = 0x01;
 const WHEEL_RATCHET_RATCHET: u8 = 0x02;
 
+/// Raw SmartShift values returned by the device.
+///
+/// `ratchet` is 1 for free spin and 2 for ratchet mode; other device values are preserved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmartShiftState {
     pub ratchet: u8,
     pub ratchet_speed: u8,
     pub force: u8,
 }
 
+/// Main-wheel inversion, high-resolution reporting, and HID++ event-diversion flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HiresWheelStatus {
     pub invert: bool,
     pub resolution: bool,
     pub divert: bool,
 }
 
+/// Thumb-wheel inversion and HID++ event-diversion flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ThumbWheelStatus {
     pub invert: bool,
     pub divert: bool,
 }
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -47,6 +58,7 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Read and print thumb-wheel status; accepts `None` for text or `Some("--json")` for JSON.
 pub fn thumb_status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -59,6 +71,7 @@ pub fn thumb_status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Print text status, or an unavailable message if reading the device fails.
 pub fn print_best_effort() {
     match read_status() {
         Ok((smart_shift, hires)) => {
@@ -68,6 +81,7 @@ pub fn print_best_effort() {
     }
 }
 
+/// Print thumb-wheel text status, or an unavailable message if reading fails.
 pub fn print_thumb_best_effort() {
     match read_thumb_status() {
         Ok(status) => println!("{}", format_thumb_status(&status, false)),
@@ -75,8 +89,15 @@ pub fn print_thumb_best_effort() {
     }
 }
 
+/// Apply one wheel setting while preserving unrelated fields in its feature payload.
+///
+/// Accepts `ratchet` (`free`/`ratchet`), `ratchet-speed` or `smart-shift` (0 through 50),
+/// `force` (1 through 100), or `invert`, `resolution`, `divert` (`on`/`off`). Does not persist
+/// settings. A wheel-update lock serializes the complete read-modify-write operation with other
+/// mx4 wheel setters using the same configuration directory.
 pub fn set(setting: &str, value: &str) -> Result<()> {
-    let (dev, idx) = open()?;
+    let _lock = crate::transport_lock::acquire_wheel()?;
+    let (dev, idx) = device::open()?;
 
     match setting {
         "ratchet" => {
@@ -104,8 +125,12 @@ pub fn set(setting: &str, value: &str) -> Result<()> {
     }
 }
 
+/// Apply thumb-wheel `invert` or `divert` (`on`/`off`), preserving unrelated flags.
+///
+/// Does not persist settings. Uses the same wheel-update lock as [`set`].
 pub fn set_thumb(setting: &str, value: &str) -> Result<()> {
-    let (dev, idx) = open()?;
+    let _lock = crate::transport_lock::acquire_wheel()?;
+    let (dev, idx) = device::open()?;
 
     match setting {
         "invert" => set_thumb_flag(&dev, idx, THUMB_INVERT_MASK, parse_toggle(value)?),
@@ -150,40 +175,40 @@ fn parse_toggle(arg: &str) -> Result<bool> {
     }
 }
 
-fn read_smart_shift_state(dev: &hidapi::HidDevice, idx: u8) -> Result<SmartShiftState> {
-    let feature_idx = feature(dev, idx, SMART_SHIFT_ENHANCED)?;
-    let reply = req(dev, idx, feature_idx, 0x01, &[])?;
+fn read_smart_shift_state(dev: &HidDevice, idx: u8) -> Result<SmartShiftState> {
+    let feature_idx = device::feature(dev, idx, SMART_SHIFT_ENHANCED)?;
+    let reply = device::req(dev, idx, feature_idx, 0x01, &[])?;
     parse_smart_shift_reply(&reply)
 }
 
-fn read_hires_status(dev: &hidapi::HidDevice, idx: u8) -> Result<HiresWheelStatus> {
-    let feature_idx = feature(dev, idx, HIRES_WHEEL)?;
-    let reply = req(dev, idx, feature_idx, 0x01, &[])?;
+fn read_hires_status(dev: &HidDevice, idx: u8) -> Result<HiresWheelStatus> {
+    let feature_idx = device::feature(dev, idx, HIRES_WHEEL)?;
+    let reply = device::req(dev, idx, feature_idx, 0x01, &[])?;
     parse_hires_reply(&reply)
 }
 
+/// Read the thumb wheel's inversion and event-diversion flags.
 pub fn read_thumb_status() -> Result<ThumbWheelStatus> {
-    let (dev, idx) = open()?;
-    let feature_idx = feature(&dev, idx, THUMB_WHEEL)?;
-    let reply = req(&dev, idx, feature_idx, 0x01, &[])?;
+    let (dev, idx) = device::open()?;
+    let feature_idx = device::feature(&dev, idx, THUMB_WHEEL)?;
+    let reply = device::req(&dev, idx, feature_idx, 0x01, &[])?;
     parse_thumb_reply(&reply)
 }
 
+/// Return SmartShift state followed by the high-resolution wheel flags.
+///
+/// Both reads must succeed; the two reports are queried separately, not as an atomic snapshot.
 pub fn read_status() -> Result<(SmartShiftState, HiresWheelStatus)> {
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
     let smart_shift = read_smart_shift_state(&dev, idx)?;
     let hires = read_hires_status(&dev, idx)?;
     Ok((smart_shift, hires))
 }
 
-fn write_smart_shift_state(
-    dev: &hidapi::HidDevice,
-    idx: u8,
-    state: &SmartShiftState,
-) -> Result<()> {
+fn write_smart_shift_state(dev: &HidDevice, idx: u8, state: &SmartShiftState) -> Result<()> {
     // All three SmartShift settings occupy one payload and must be written together.
-    let feature_idx = feature(dev, idx, SMART_SHIFT_ENHANCED)?;
-    req(
+    let feature_idx = device::feature(dev, idx, SMART_SHIFT_ENHANCED)?;
+    device::req(
         dev,
         idx,
         feature_idx,
@@ -223,24 +248,24 @@ fn parse_thumb_reply(reply: &[u8]) -> Result<ThumbWheelStatus> {
     })
 }
 
-fn set_hires_flag(dev: &hidapi::HidDevice, idx: u8, mask: u8, enabled: bool) -> Result<()> {
-    let feature_idx = feature(dev, idx, HIRES_WHEEL)?;
+fn set_hires_flag(dev: &HidDevice, idx: u8, mask: u8, enabled: bool) -> Result<()> {
+    let feature_idx = device::feature(dev, idx, HIRES_WHEEL)?;
     // Preserve every unrelated flag reported by the device.
-    let mut reply = req(dev, idx, feature_idx, 0x01, &[])?;
+    let mut reply = device::req(dev, idx, feature_idx, 0x01, &[])?;
     let flags = reply.get_mut(4).ok_or("the wheel reply was too short")?;
     *flags = apply_mask_u8(*flags, mask, enabled);
-    req(dev, idx, feature_idx, 0x02, &[*flags])?;
+    device::req(dev, idx, feature_idx, 0x02, &[*flags])?;
     Ok(())
 }
 
-fn set_thumb_flag(dev: &hidapi::HidDevice, idx: u8, mask: [u8; 2], enabled: bool) -> Result<()> {
-    let feature_idx = feature(dev, idx, THUMB_WHEEL)?;
-    let reply = req(dev, idx, feature_idx, 0x01, &[])?;
+fn set_thumb_flag(dev: &HidDevice, idx: u8, mask: [u8; 2], enabled: bool) -> Result<()> {
+    let feature_idx = device::feature(dev, idx, THUMB_WHEEL)?;
+    let reply = device::req(dev, idx, feature_idx, 0x01, &[])?;
     let bytes = reply
         .get(4..6)
         .ok_or("the thumb-wheel reply was too short")?;
     let payload = apply_mask_bytes([bytes[0], bytes[1]], mask, enabled);
-    req(dev, idx, feature_idx, 0x02, &payload)?;
+    device::req(dev, idx, feature_idx, 0x02, &payload)?;
     Ok(())
 }
 
@@ -256,6 +281,8 @@ fn apply_mask_bytes(value: [u8; 2], mask: [u8; 2], enabled: bool) -> [u8; 2] {
     }
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(
     smart_shift: &SmartShiftState,
     hires: &HiresWheelStatus,
@@ -284,6 +311,8 @@ pub fn format_status(
     }
 }
 
+/// Format thumb-wheel status without device I/O; `json` selects JSON or text.
+#[must_use]
 pub fn format_thumb_status(status: &ThumbWheelStatus, json: bool) -> String {
     if json {
         format!(
@@ -299,11 +328,13 @@ pub fn format_thumb_status(status: &ThumbWheelStatus, json: bool) -> String {
     }
 }
 
+/// Read status and return JSON without printing it.
 pub fn json_status() -> Result<String> {
     let (smart_shift, hires) = read_status()?;
     Ok(format_status(&smart_shift, &hires, true))
 }
 
+/// Read thumb-wheel status and return JSON without printing it.
 pub fn json_thumb_status() -> Result<String> {
     Ok(format_thumb_status(&read_thumb_status()?, true))
 }

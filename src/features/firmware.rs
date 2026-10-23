@@ -7,7 +7,7 @@
 use hidapi::HidDevice;
 
 use crate::Result;
-use crate::device::{SHORT, feature, open, open_bolt_receiver, req, write_packet};
+use crate::device;
 
 const DEVICE_FW_VERSION: u16 = 0x0003;
 const RECEIVER_INDEX: u8 = 0xff;
@@ -59,6 +59,7 @@ pub struct FirmwareStatus {
     pub receiver: Option<Vec<FirmwareEntity>>,
 }
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -70,6 +71,10 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Read mouse and receiver firmware independently, retaining either successful result.
+///
+/// A missing or failed side becomes `None`; returns an error only if neither side succeeds.
+/// Use [`read_mouse`] and [`read_receiver`] directly when individual error details matter.
 pub fn read_status() -> Result<FirmwareStatus> {
     // A Bluetooth mouse can be available without a receiver, and a receiver can remain plugged in
     // while its mouse is switched away. Preserve whichever half answered instead of failing both.
@@ -83,27 +88,32 @@ pub fn read_status() -> Result<FirmwareStatus> {
     Ok(FirmwareStatus { mouse, receiver })
 }
 
+/// Read all firmware entities reported by the mouse; any failed query returns an error.
 pub fn read_mouse() -> Result<Vec<FirmwareEntity>> {
-    let (dev, idx) = open()?;
+    let (dev, idx) = device::open()?;
     // HID++ 2.0 feature IDs are resolved through the root feature before their runtime index can be
     // used. Function 0 returns the entity count; function 1 returns one entity by index.
-    let feature = feature(&dev, idx, DEVICE_FW_VERSION)?;
-    let info = req(&dev, idx, feature, 0x00, &[])?;
+    let feature = device::feature(&dev, idx, DEVICE_FW_VERSION)?;
+    let info = device::req(&dev, idx, feature, 0x00, &[])?;
     let count = *info
         .get(4)
         .ok_or("the device firmware information reply was too short")?;
     let mut entities = Vec::with_capacity(usize::from(count));
 
     for entity_idx in 0..count {
-        let reply = req(&dev, idx, feature, 0x01, &[entity_idx])?;
+        let reply = device::req(&dev, idx, feature, 0x01, &[entity_idx])?;
         entities.push(parse_mouse_entity(&reply)?);
     }
 
     Ok(entities)
 }
 
+/// Read recognized firmware entities from the first Bolt receiver.
+///
+/// Returns `None` if no receiver is enumerated. Discovery or query failures return an error;
+/// an empty vector means a receiver was read but no recognized entities were found.
 pub fn read_receiver() -> Result<Option<Vec<FirmwareEntity>>> {
-    let Some(dev) = open_bolt_receiver()? else {
+    let Some(dev) = device::open_bolt_receiver()? else {
         return Ok(None);
     };
     let mut entities = Vec::new();
@@ -121,6 +131,8 @@ pub fn read_receiver() -> Result<Option<Vec<FirmwareEntity>>> {
     Ok(Some(entities))
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(status: &FirmwareStatus, json: bool) -> String {
     if json {
         return format!(
@@ -144,7 +156,7 @@ fn receiver_entity(dev: &HidDevice, entity_idx: u8) -> Result<Vec<u8>> {
     // HID++ 1.0 long-register read:
     // report ID, receiver index, GET_LONG_REGISTER, register, entity index, padding.
     let packet = [
-        SHORT,
+        device::SHORT,
         RECEIVER_INDEX,
         GET_LONG_REGISTER,
         RECEIVER_FW_INFORMATION,
@@ -152,7 +164,7 @@ fn receiver_entity(dev: &HidDevice, entity_idx: u8) -> Result<Vec<u8>> {
         0,
         0,
     ];
-    write_packet(
+    device::write_packet(
         dev,
         &packet,
         "the receiver firmware request didn't fully send",

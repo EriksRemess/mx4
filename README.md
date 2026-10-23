@@ -155,7 +155,9 @@ mx4 daemon --install
 
 This creates a user `systemd` service on Linux or a user `launchd` agent on macOS. It watches for reconnects and reapplies saved settings. No `sudo` is needed.
 
-The CLI and daemon coordinate device access through a lock file in the configuration directory. Both must use the same configuration directory, which must be writable even for status queries.
+The CLI and daemon coordinate device access through lock files in the configuration directory. Wheel setters lock the full read-modify-write operation, and persistent setting changes are serialized with daemon reconciliation. Each daemon retry reloads the latest saved settings. A symlinked config keeps its lock in the app configuration directory, so applying settings does not require writing beside the symlink target.
+
+Both must use the same configuration directory, which must be writable even for status queries. On Linux, installation records the current configuration location in the service, including a custom `XDG_CONFIG_HOME`. Reinstallation updates the existing service file even if that configuration location has changed; uninstallation also uses the installed service's location. After upgrading an installed binary, run `mx4 daemon --install` again to refresh the service definition and restart the daemon.
 
 Other daemon modes:
 

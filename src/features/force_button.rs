@@ -1,16 +1,21 @@
 //! Force-sensing button threshold and device-provided limits.
 
+use hidapi::HidDevice;
+
 use crate::Result;
-use crate::device::{feature, open, req};
+use crate::device;
 
 const FORCE_SENSING_BUTTON: u16 = 0x19c0;
 
+/// Whether the threshold can be changed and its inclusive device-provided bounds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ForceButtonInfo {
     pub changeable: bool,
     pub min_value: u16,
     pub max_value: u16,
 }
 
+/// Read and print status; `arg` accepts `None` for text or `Some("--json")` for JSON.
 pub fn status(arg: Option<&str>) -> Result<()> {
     let json = match arg {
         None => false,
@@ -23,6 +28,7 @@ pub fn status(arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Print text status, or an unavailable message if reading the device fails.
 pub fn print_best_effort() {
     match read_status() {
         Ok((value, info)) => println!("{}", format_status(value, &info, false)),
@@ -30,9 +36,12 @@ pub fn print_best_effort() {
     }
 }
 
+/// Apply a threshold after validating it against the device-provided limits and writability.
+///
+/// This changes the device only; it does not save the threshold to configuration.
 pub fn set(arg: &str) -> Result<()> {
-    let (dev, idx) = open()?;
-    let feature = feature(&dev, idx, FORCE_SENSING_BUTTON)?;
+    let (dev, idx) = device::open()?;
+    let feature = device::feature(&dev, idx, FORCE_SENSING_BUTTON)?;
     let info = read_info(&dev, idx, feature)?;
     // Limits vary by hardware/firmware, so validate against the live feature metadata instead of a
     // hard-coded CLI range.
@@ -42,7 +51,7 @@ pub fn set(arg: &str) -> Result<()> {
         return Err("that force button isn't changeable".into());
     }
 
-    req(
+    device::req(
         &dev,
         idx,
         feature,
@@ -66,22 +75,23 @@ fn parse(arg: &str, min_value: u16, max_value: u16) -> Result<u16> {
     Ok(value)
 }
 
-fn read_info(dev: &hidapi::HidDevice, idx: u8, feature_idx: u8) -> Result<ForceButtonInfo> {
-    let reply = req(dev, idx, feature_idx, 0x01, &[0])?;
+fn read_info(dev: &HidDevice, idx: u8, feature_idx: u8) -> Result<ForceButtonInfo> {
+    let reply = device::req(dev, idx, feature_idx, 0x01, &[0])?;
     parse_info_reply(&reply)
 }
 
-fn read_current(dev: &hidapi::HidDevice, idx: u8, feature_idx: u8) -> Result<u16> {
-    let reply = req(dev, idx, feature_idx, 0x02, &[0])?;
+fn read_current(dev: &HidDevice, idx: u8, feature_idx: u8) -> Result<u16> {
+    let reply = device::req(dev, idx, feature_idx, 0x02, &[0])?;
     let bytes = reply
         .get(4..6)
         .ok_or("the force-button current reply was too short")?;
     Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
 }
 
+/// Return the current force-button threshold and its device-provided capabilities and limits.
 pub fn read_status() -> Result<(u16, ForceButtonInfo)> {
-    let (dev, idx) = open()?;
-    let feature_idx = feature(&dev, idx, FORCE_SENSING_BUTTON)?;
+    let (dev, idx) = device::open()?;
+    let feature_idx = device::feature(&dev, idx, FORCE_SENSING_BUTTON)?;
     let info = read_info(&dev, idx, feature_idx)?;
     let current = read_current(&dev, idx, feature_idx)?;
     Ok((current, info))
@@ -108,6 +118,8 @@ fn parse_info_reply(reply: &[u8]) -> Result<ForceButtonInfo> {
     })
 }
 
+/// Format status without device I/O; `json` selects JSON (`true`) or text (`false`).
+#[must_use]
 pub fn format_status(current: u16, info: &ForceButtonInfo, json: bool) -> String {
     if json {
         format!(
@@ -125,6 +137,7 @@ pub fn format_status(current: u16, info: &ForceButtonInfo, json: bool) -> String
     }
 }
 
+/// Read status and return JSON without printing it.
 pub fn json_status() -> Result<String> {
     let (current, info) = read_status()?;
     Ok(format_status(current, &info, true))

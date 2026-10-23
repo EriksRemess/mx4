@@ -258,63 +258,60 @@ fn haptic(args: Vec<String>) -> Result<()> {
 
 fn set_strength(value: &str) -> Result<()> {
     let strength = features::haptic::parse_strength(value)?;
-    features::haptic::set_strength_arg(value)?;
-    config::update(|saved| saved.haptic_strength = Some(strength))
+    config::change(|saved| {
+        features::haptic::set_strength_arg(value)?;
+        saved.haptic_strength = Some(strength);
+        Ok(())
+    })
 }
 
 fn set_dpi(value: &str) -> Result<()> {
     let dpi = features::dpi::parse(value)?;
-    features::dpi::set(value)?;
-    config::update(|saved| saved.dpi = Some(dpi))
+    config::change(|saved| {
+        features::dpi::set(value)?;
+        saved.dpi = Some(dpi);
+        Ok(())
+    })
 }
 
 fn set_wheel(setting: &str, value: &str) -> Result<()> {
-    features::wheel::set(setting, value)?;
-
-    match setting {
-        "ratchet" => {
-            let ratchet = parse_ratchet(value)?;
-            config::update(|saved| saved.wheel_ratchet = Some(ratchet))
+    config::change(|saved| {
+        features::wheel::set(setting, value)?;
+        match setting {
+            "ratchet" => saved.wheel_ratchet = Some(parse_ratchet(value)?),
+            "ratchet-speed" | "smart-shift" => {
+                saved.wheel_ratchet_speed = Some(value.trim().parse()?)
+            }
+            "force" => saved.wheel_force = Some(value.trim().parse()?),
+            "invert" => saved.wheel_invert = Some(parse_toggle(value)?),
+            "resolution" => saved.wheel_resolution = Some(parse_toggle(value)?),
+            "divert" => saved.wheel_divert = Some(parse_toggle(value)?),
+            _ => unreachable!("wheel setter rejected unknown settings"),
         }
-        "ratchet-speed" | "smart-shift" => {
-            let speed: u8 = value.trim().parse()?;
-            config::update(|saved| saved.wheel_ratchet_speed = Some(speed))
-        }
-        "force" => {
-            let force: u8 = value.trim().parse()?;
-            config::update(|saved| saved.wheel_force = Some(force))
-        }
-        "invert" => {
-            let enabled = parse_toggle(value)?;
-            config::update(|saved| saved.wheel_invert = Some(enabled))
-        }
-        "resolution" => {
-            let enabled = parse_toggle(value)?;
-            config::update(|saved| saved.wheel_resolution = Some(enabled))
-        }
-        "divert" => {
-            let enabled = parse_toggle(value)?;
-            config::update(|saved| saved.wheel_divert = Some(enabled))
-        }
-        _ => Ok(()),
-    }
+        Ok(())
+    })
 }
 
 fn set_thumb_wheel(setting: &str, value: &str) -> Result<()> {
-    features::wheel::set_thumb(setting, value)?;
-    let enabled = parse_toggle(value)?;
-
-    match setting {
-        "invert" => config::update(|saved| saved.thumb_wheel_invert = Some(enabled)),
-        "divert" => config::update(|saved| saved.thumb_wheel_divert = Some(enabled)),
-        _ => Ok(()),
-    }
+    config::change(|saved| {
+        features::wheel::set_thumb(setting, value)?;
+        let enabled = parse_toggle(value)?;
+        match setting {
+            "invert" => saved.thumb_wheel_invert = Some(enabled),
+            "divert" => saved.thumb_wheel_divert = Some(enabled),
+            _ => unreachable!("thumb-wheel setter rejected unknown settings"),
+        }
+        Ok(())
+    })
 }
 
 fn set_force_button(value: &str) -> Result<()> {
     let force_button: u16 = value.trim().parse()?;
-    features::force_button::set(value)?;
-    config::update(|saved| saved.force_button = Some(force_button))
+    config::change(|saved| {
+        features::force_button::set(value)?;
+        saved.force_button = Some(force_button);
+        Ok(())
+    })
 }
 
 fn parse_toggle(value: &str) -> Result<bool> {

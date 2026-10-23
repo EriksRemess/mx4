@@ -17,6 +17,10 @@ const APPLY_ATTEMPTS: usize = 5;
 const APPLY_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MISSING_POLLS_BEFORE_DISCONNECT: u8 = 2;
 
+/// Run the CLI daemon mode selected by `args`.
+///
+/// No arguments starts a blocking reconnect loop. `--once` applies saved settings with retries;
+/// `--install` and `--uninstall` manage the per-user service. Other arguments return an error.
 pub fn run(args: &[String]) -> Result<()> {
     match args {
         [] => run_loop(),
@@ -97,18 +101,20 @@ fn should_reconcile(
 }
 
 fn apply_once_with_retry() -> Result<()> {
-    let config = config::load().map_err(|err| format!("couldn't load config: {err}"))?;
+    retry_settings(config::reconcile, || thread::sleep(APPLY_RETRY_DELAY))
+}
 
-    if config.is_empty() {
-        return Ok(());
-    }
-
+fn retry_settings(
+    mut apply: impl FnMut() -> Result<Vec<String>>,
+    mut wait: impl FnMut(),
+) -> Result<()> {
     let mut last_errors = Vec::new();
 
     // A reconnecting mouse may accept some features before others, so retry the complete best-effort
     // pass and report only the errors still present after the final attempt.
     for attempt in 0..APPLY_ATTEMPTS {
-        let errors = config::apply_best_effort(&config);
+        // Each attempt reloads under the configuration lock; wait without holding any locks.
+        let errors = apply()?;
 
         if errors.is_empty() {
             return Ok(());
@@ -117,9 +123,48 @@ fn apply_once_with_retry() -> Result<()> {
         last_errors = errors;
 
         if attempt + 1 != APPLY_ATTEMPTS {
-            thread::sleep(APPLY_RETRY_DELAY);
+            wait();
         }
     }
 
     Err(last_errors.join("; ").into())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn retries_refresh_settings_after_waiting() {
+        let desired = std::cell::Cell::new(2000);
+        let mut applied = Vec::new();
+        super::retry_settings(
+            || {
+                applied.push(desired.get());
+                Ok(if applied.len() == 1 {
+                    vec!["temporarily unavailable".into()]
+                } else {
+                    Vec::new()
+                })
+            },
+            || desired.set(2500),
+        )
+        .unwrap();
+        assert_eq!(applied, [2000, 2500]);
+    }
+
+    #[test]
+    fn retries_are_bounded_and_report_the_last_failure() {
+        let mut attempts = 0;
+        let mut waits = 0;
+        let error = super::retry_settings(
+            || {
+                attempts += 1;
+                Ok(vec![format!("failure {attempts}")])
+            },
+            || waits += 1,
+        )
+        .unwrap_err();
+        assert_eq!(attempts, super::APPLY_ATTEMPTS);
+        assert_eq!(waits, attempts - 1);
+        assert_eq!(error.to_string(), format!("failure {attempts}"));
+    }
 }

@@ -1,15 +1,12 @@
 [package]
 name = "mx4"
-version = "0.6.3"
+version = "0.6.4"
 description = "Tiny CLI and Rust library for MX Master 4 status and settings"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/EriksRemess/mx4"
 homepage = "https://github.com/EriksRemess/mx4"
 readme = "README.md"
-
-[dependencies]
-hidapi = "2.6.6"
 
 [package.metadata.deb]
 maintainer = "Eriks Remess <eriks@remess.lv>"
@@ -25,3 +22,6 @@ assets = [
     ["LICENSE", "usr/share/doc/mx4/copyright", "644"],
     ["contrib/udev/70-mx4.rules", "usr/lib/udev/rules.d/70-mx4.rules", "644"],
 ]
+
+[dependencies]
+hidapi = "2.6.6"
