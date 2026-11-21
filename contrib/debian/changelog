@@ -1,3 +1,9 @@
+mx4 (0.6.5-1) unstable; urgency=medium
+
+  * feat: adopt Rust 1.100 and harden device and service handling
+
+ -- Eriks Remess <eriks@remess.lv>  Sat, 21 Nov 2026 22:50:41 +0200
+
 mx4 (0.6.4-1) unstable; urgency=medium
 
   * feat: serialize settings updates and daemon reconciliation
