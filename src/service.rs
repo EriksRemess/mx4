@@ -9,7 +9,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::Result;
+use crate::{Result, config};
 
 const SERVICE_NAME: &str = "mx4.service";
 const LAUNCH_AGENT_LABEL: &str = "io.github.eriksremess.mx4";
@@ -48,10 +48,9 @@ fn ensure_user_context() -> Result<()> {
 }
 
 fn install_linux_service() -> Result<()> {
-    let service_path =
-        installed_linux_service_path()?.unwrap_or(linux_service_dir()?.join(SERVICE_NAME));
+    let service_path = linux_service_path()?;
     let executable = env::current_exe()?;
-    let unit = linux_unit(&executable, &linux_config_home()?);
+    let unit = linux_unit(&executable, &config::linux_config_home()?);
     write_if_changed(&service_path, &unit)?;
     // An explicit install also activates upgrades at the same executable path and retries a
     // previous failed reload. Enabling an already-active service alone would retain its old process.
@@ -71,8 +70,7 @@ fn install_linux_service() -> Result<()> {
 }
 
 fn uninstall_linux_service() -> Result<()> {
-    let service_path =
-        installed_linux_service_path()?.unwrap_or(linux_service_dir()?.join(SERVICE_NAME));
+    let service_path = linux_service_path()?;
 
     // Ignore failure only when the manager confirms there is no service left to stop. Preserve the
     // unit file on bus, permission, or stop failures so the user can retry the uninstall.
@@ -210,7 +208,7 @@ fn installed_linux_service_path() -> Result<Option<PathBuf>> {
         .into());
     }
     let value = String::from_utf8(output.stdout)?;
-    let value = value.strip_suffix('\n').unwrap_or(&value);
+    let value = value.trim_suffix('\n');
     if value.is_empty() {
         return Ok(None);
     }
@@ -244,16 +242,13 @@ fn remove_if_exists(path: &Path) -> Result<bool> {
     }
 }
 
-fn linux_config_home() -> Result<PathBuf> {
-    let home = env::var_os("HOME").ok_or("couldn't determine HOME")?;
-    let path = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(home).join(".config"));
-    Ok(env::current_dir()?.join(path))
-}
-
-fn linux_service_dir() -> Result<PathBuf> {
-    Ok(linux_config_home()?.join("systemd").join("user"))
+fn linux_service_path() -> Result<PathBuf> {
+    match installed_linux_service_path()? {
+        Some(path) => Ok(path),
+        None => Ok(config::linux_config_home()?
+            .join("systemd/user")
+            .join(SERVICE_NAME)),
+    }
 }
 
 fn macos_launch_agents_dir() -> Result<PathBuf> {

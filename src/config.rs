@@ -6,6 +6,7 @@
 use std::env;
 use std::fs;
 use std::io::{ErrorKind, Write};
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -93,7 +94,8 @@ impl SavedConfig {
 
 /// Resolve the per-user configuration path without creating or reading the file.
 ///
-/// Uses `XDG_CONFIG_HOME` (or `~/.config`) on Linux, and `~/Library/Application Support` on macOS.
+/// Uses an absolute `XDG_CONFIG_HOME` (or `~/.config`) on Linux, and
+/// `~/Library/Application Support` on macOS. Empty or relative XDG paths are ignored.
 pub fn config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("config.toml"))
 }
@@ -212,14 +214,6 @@ fn config_write_path(path: &Path) -> Result<PathBuf> {
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-struct TemporaryConfig(PathBuf);
-
-impl Drop for TemporaryConfig {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 fn save_to_path(path: &Path, config: &SavedConfig) -> Result<()> {
     let (temporary, mut file) = loop {
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -232,7 +226,12 @@ fn save_to_path(path: &Path, config: &SavedConfig) -> Result<()> {
             options.mode(0o600);
         }
         match options.open(&temporary) {
-            Ok(file) => break (TemporaryConfig(temporary), file),
+            Ok(file) => {
+                let temporary = DropGuard::new(temporary, |path| {
+                    let _ = fs::remove_file(path);
+                });
+                break (temporary, file);
+            }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err.into()),
         }
@@ -244,7 +243,8 @@ fn save_to_path(path: &Path, config: &SavedConfig) -> Result<()> {
     file.sync_all()?;
     drop(file);
     // Same-directory rename makes readers see either the old or the complete new configuration.
-    fs::rename(&temporary.0, path)?;
+    fs::rename(&*temporary, path)?;
+    DropGuard::dismiss(temporary);
     Ok(())
 }
 
@@ -365,19 +365,30 @@ fn collect_error(errors: &mut Vec<String>, label: &str, result: Result<()>) {
 }
 
 fn config_dir() -> Result<PathBuf> {
-    let home = env::var_os("HOME").ok_or("couldn't determine HOME")?;
-
     let base = if cfg!(target_os = "macos") {
+        let home = env::var_os("HOME").ok_or("couldn't determine HOME")?;
         PathBuf::from(home)
             .join("Library")
             .join("Application Support")
     } else {
-        env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(home).join(".config"))
+        linux_config_home()?
     };
 
     Ok(base.join("mx4"))
+}
+
+pub(crate) fn linux_config_home() -> Result<PathBuf> {
+    // Share this resolution with service installation so CLI and daemon locks cannot diverge.
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from)
+        && path.is_absolute()
+    {
+        return Ok(path);
+    }
+    let home = PathBuf::from(env::var_os("HOME").ok_or("couldn't determine HOME")?);
+    if !home.is_absolute() {
+        return Err("HOME must be an absolute path".into());
+    }
+    Ok(home.join(".config"))
 }
 
 fn load_from_path(path: &Path) -> Result<SavedConfig> {
@@ -486,6 +497,21 @@ fn on_off(value: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_save_removes_temporary_file() {
+        let path = temporary_path();
+        // A directory at the destination forces rename to fail after writing the temporary file.
+        std::fs::create_dir_all(&path).unwrap();
+        let result = super::save_to_path(&path, &super::SavedConfig::default());
+        assert!(result.is_err());
+        assert!(path.is_dir());
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     #[test]
     fn failed_device_change_does_not_save() {
         let path = temporary_path();

@@ -24,6 +24,7 @@ const LONG: u8 = 0x11;
 const SW_ID: u8 = 0x02;
 const HIDPP_ERROR: u8 = 0x8f;
 const HIDPP20_ERROR: u8 = 0xff;
+const MAX_DRAIN_READS: usize = 256;
 
 /// Open an MX Master 4, preferring Bluetooth over a mouse paired with a Bolt receiver.
 ///
@@ -98,9 +99,10 @@ pub fn feature(dev: &HidDevice, idx: u8, feature_id: u16) -> Result<u8> {
 /// must fit in four bits. At most three parameter bytes are accepted.
 ///
 /// Acquires a blocking per-user file lock, discards pending input, then waits for a matching reply.
-/// The reply loop makes at most 100 reads with a 10 ms timeout each; lock acquisition and input
-/// draining have no fixed deadline. All cooperating clients must use the same configuration
-/// directory. This transport lock covers one exchange; wheel setters additionally hold a separate
+/// Input draining makes at most 256 nonblocking reads and errors if the queue stays busy. The reply
+/// loop makes at most 100 reads with a 10 ms timeout each; lock acquisition has no fixed deadline.
+/// All cooperating clients must use the same configuration directory.
+/// This transport lock covers one exchange; wheel setters additionally hold a separate
 /// lock across their entire read-modify-write sequence.
 ///
 /// Returns an error for invalid arguments, lock or HID failures, protocol rejection, or no matching
@@ -108,8 +110,7 @@ pub fn feature(dev: &HidDevice, idx: u8, feature_id: u16) -> Result<u8> {
 pub fn req(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -> Result<Vec<u8>> {
     let _lock = crate::transport_lock::acquire()?;
     // Remove delayed notifications or replies from an earlier request before matching a new one.
-    let mut drain = [0u8; 64];
-    while dev.read_timeout(&mut drain, 0)? != 0 {}
+    drain_input(dev)?;
 
     send_unlocked(dev, idx, feature, function, params)?;
 
@@ -141,6 +142,21 @@ pub fn req(dev: &HidDevice, idx: u8, feature: u8, function: u8, params: &[u8]) -
     }
 
     Err(RequestTimeout.into())
+}
+
+// Call only while holding the transport lock. Both mouse and receiver exchanges drain input.
+pub(crate) fn drain_input(dev: &HidDevice) -> Result<()> {
+    let mut report = [0u8; 64];
+    drain_pending(|| Ok(dev.read_timeout(&mut report, 0)?))
+}
+
+fn drain_pending(mut read: impl FnMut() -> Result<usize>) -> Result<()> {
+    for _ in 0..MAX_DRAIN_READS {
+        if read()? == 0 {
+            return Ok(());
+        }
+    }
+    Err("HID input stayed busy while draining pending reports; try again".into())
 }
 
 /// Send a short feature request without waiting for a reply, for operations that disconnect.
@@ -392,6 +408,32 @@ fn hidpp_error_name(error_type: u8, code: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{LONG, ReplyMatch, SHORT, classify_reply, wire_packet};
+
+    #[test]
+    fn input_draining_is_bounded_even_with_continuous_reports() {
+        let mut reads = 0;
+        let result = super::drain_pending(|| {
+            reads += 1;
+            assert!(reads <= super::MAX_DRAIN_READS);
+            Ok(7)
+        });
+        assert!(result.is_err());
+        assert_eq!(reads, super::MAX_DRAIN_READS);
+    }
+
+    #[test]
+    fn input_draining_stops_at_empty_queue_and_propagates_io_errors() {
+        let mut reports = [Ok(7), Ok(20), Ok(0)].into_iter();
+        super::drain_pending(|| reports.next().expect("must stop when empty")).unwrap();
+        let error = super::drain_pending(|| {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
 
     fn model_reply(pid: u16) -> Vec<u8> {
         let mut reply = vec![0; 20];

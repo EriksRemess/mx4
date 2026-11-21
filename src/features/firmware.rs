@@ -150,8 +150,7 @@ pub fn format_status(status: &FirmwareStatus, json: bool) -> String {
 
 fn receiver_entity(dev: &HidDevice, entity_idx: u8) -> Result<Vec<u8>> {
     let _lock = crate::transport_lock::acquire()?;
-    let mut drain = [0u8; 64];
-    while dev.read_timeout(&mut drain, 0)? != 0 {}
+    device::drain_input(dev)?;
 
     // HID++ 1.0 long-register read:
     // report ID, receiver index, GET_LONG_REGISTER, register, entity index, padding.
@@ -266,7 +265,7 @@ fn format_version(major: u8, minor: u8, build: u16) -> String {
 }
 
 fn ascii_name(bytes: &[u8]) -> Option<String> {
-    let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
+    let bytes = bytes.trim_suffix(&[0]);
     if bytes.is_empty() {
         None
     } else {

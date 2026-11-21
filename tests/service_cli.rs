@@ -56,6 +56,8 @@ esac
         let mut command = Command::new(env!("CARGO_BIN_EXE_mx4"));
         command
             .args(["daemon", option])
+            .current_dir(&self.root)
+            .env("HOME", self.root.join("home"))
             .env("PATH", self.root.join("bin"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("MX4_TEST_LOG", self.root.join("calls"))
@@ -76,6 +78,39 @@ impl Drop for ServiceTest {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn invalid_config_home_uses_the_same_default_for_service_and_cli() {
+    for config_home in ["", "relative-config"] {
+        let test = ServiceTest::new();
+        let variables = [("XDG_CONFIG_HOME", config_home)];
+        let installed = test.run("--install", &variables);
+        assert!(installed.status.success(), "{installed:?}");
+        let default_home = test.root.join("home/.config");
+        let unit = fs::read_to_string(default_home.join("systemd/user/mx4.service")).unwrap();
+        assert!(unit.contains(&format!(
+            "Environment=\"XDG_CONFIG_HOME={}\"",
+            default_home.display()
+        )));
+        assert!(test.run("--once", &variables).status.success());
+        assert!(default_home.join("mx4/config.toml.lock").is_file());
+        assert!(!test.root.join("mx4").exists());
+        assert!(!test.root.join("relative-config").exists());
+    }
+}
+
+#[test]
+fn absolute_config_home_works_without_home() {
+    let test = ServiceTest::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_mx4"))
+        .args(["daemon", "--once"])
+        .env_remove("HOME")
+        .env("XDG_CONFIG_HOME", test.root.join("config"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(test.root.join("config/mx4/config.toml.lock").is_file());
 }
 
 #[test]
@@ -184,6 +219,23 @@ fn uninstall_preserves_unit_on_stop_or_bus_failure() {
         assert!(test.unit_path().exists());
         assert!(!test.calls().contains("daemon-reload"));
     }
+}
+
+#[test]
+fn uninstall_existing_service_does_not_require_config_environment() {
+    let test = ServiceTest::new();
+    test.seed_unit();
+    let path = test.unit_path();
+    let result = test.run(
+        "--uninstall",
+        &[
+            ("HOME", ""),
+            ("XDG_CONFIG_HOME", ""),
+            ("MX4_TEST_FRAGMENT", path.to_str().unwrap()),
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert!(!path.exists());
 }
 
 #[test]
